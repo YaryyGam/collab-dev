@@ -1,0 +1,34 @@
+{
+  "min_agree_words": 6,
+  "write_tools": ["Write", "Edit", "MultiEdit", "NotebookEdit"],
+  "explain_after_write_modes": ["learning", "collaborative", "review"],
+  "review_heading_pattern": "^#{1,3}\\s*(Итоговый разбор|Підсумковий розбір|Final review)\\b",
+  "verification_heading_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Проверка|Перевірка|Verification)\\b",
+  "bash": {
+    "safe_redirect_targets": ["/dev/null", "/dev/stdout", "/dev/stderr"],
+    "write_commands": [
+      "rm", "mv", "cp", "touch", "mkdir", "rmdir", "ln", "chmod", "chown",
+      "truncate", "dd", "install", "patch", "tee", "unlink", "rsync"
+    ],
+    "flag_writes": {
+      "sed": ["-i", "--in-place"],
+      "perl": ["-i", "-pi"],
+      "find": ["-delete"]
+    },
+    "subcommand_writes": {
+      "git": ["add", "am", "apply", "checkout", "cherry-pick", "clean", "commit", "merge", "mv", "pull", "rebase", "reset", "restore", "revert", "rm", "stash", "switch"],
+      "npm": ["install", "i", "ci", "uninstall", "update", "add"],
+      "pnpm": ["install", "i", "add", "remove", "update"],
+      "yarn": ["install", "add", "remove", "upgrade"],
+      "pip": ["install", "uninstall"],
+      "pip3": ["install", "uninstall"],
+      "poetry": ["add", "remove", "install", "update", "lock"],
+      "uv": ["add", "remove", "sync", "lock", "pip"],
+      "cargo": ["add", "remove", "install", "update"],
+      "go": ["get", "mod"]
+    },
+    "wrappers": ["sudo", "env", "nohup", "time", "nice", "command", "exec", "xargs"],
+    "interpreters": ["python", "python3", "node", "ruby", "perl", "php", "deno", "bun"],
+    "inline_write_markers": ["\\.write\\(", "write_text\\(", "write_bytes\\(", "writeFile", "appendFile", "open\\([^)]*['\"][wax]\\+?['\"]", "File\\.write", "unlink\\(", "rmtree\\(", "os\\.remove\\(", "rename\\("]
+  }
+}

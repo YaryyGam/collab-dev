@@ -1,0 +1,20 @@
+{
+  "name": "collab",
+  "displayName": "Collaborative Development",
+  "version": "0.1.0",
+  "description": "Claude does not write code until the developer has proposed an approach, justified it, compared it with alternatives and confirmed the agreed solution in their own words (/collab:agree). Ends every unit of work with a technical review.",
+  "author": {
+    "name": "Yaroslav Lytvyn"
+  },
+  "license": "MIT",
+  "keywords": ["learning", "pair-programming", "workflow", "code-understanding"],
+  "userConfig": {
+    "default_mode": {
+      "type": "string",
+      "title": "Default collaboration mode",
+      "description": "learning: maximum depth of discussion and explanation; collaborative: balanced, for everyday work; review: the developer designs the solution, Claude reviews it. Switch per session with /collab:mode.",
+      "options": ["learning", "collaborative", "review"],
+      "default": "collaborative"
+    }
+  }
+}

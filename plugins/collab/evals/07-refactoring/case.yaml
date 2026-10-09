@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: 07-refactoring
+tags: [discussion]
+context:
+  scaffold_script: fixture.sh

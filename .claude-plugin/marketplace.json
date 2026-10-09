@@ -1,0 +1,16 @@
+{
+  "name": "collab-dev",
+  "owner": {
+    "name": "Yaroslav Lytvyn"
+  },
+  "metadata": {
+    "description": "Collaborative Development: the developer proposes and justifies the approach before Claude writes code"
+  },
+  "plugins": [
+    {
+      "name": "collab",
+      "source": "./plugins/collab",
+      "description": "Mandatory collaborative-development workflow: developer's approach first, reasoning analysis, alternatives, agreed implementation with explanations, final technical review"
+    }
+  ]
+}
