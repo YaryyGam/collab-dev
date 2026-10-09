@@ -7,7 +7,7 @@
 | Как Claude ведёт диалог: этапы, вопросы, анализ, формат разбора | 💬 правила | `plugins/collab/output-styles/collab.md` |
 | Чем отличаются режимы | 💬 правила | `plugins/collab/modes/<режим>.md` |
 | Что Claude делает после команды | 💬 правила | `plugins/collab/skills/<команда>/SKILL.md` |
-| Что считается записью, длина пересказа, заголовки разбора | 🔒 параметры шлюза | `plugins/collab/config/gate.json` |
+| Что считается записью (разделы `bash` и `powershell`), длина пересказа, заголовки разбора | 🔒 параметры шлюза | `plugins/collab/config/gate.json` |
 | Логику стадий и блокировок | 🔒 код | `plugins/collab/scripts/collab_gate.py` + `tests/` |
 | На какие события реагирует плагин | 🔒 подключение | `plugins/collab/hooks/hooks.json` |
 

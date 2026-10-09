@@ -1,7 +1,7 @@
 {
   "name": "collab",
   "displayName": "Collaborative Development",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude does not write code until the developer has proposed an approach, justified it, compared it with alternatives and confirmed the agreed solution in their own words (/collab:agree). Ends every unit of work with a technical review.",
   "author": {
     "name": "Yaroslav Lytvyn"

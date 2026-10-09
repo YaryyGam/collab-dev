@@ -1,0 +1,2 @@
+# Hook launcher must keep LF: Git for Windows (core.autocrlf) would otherwise check it out with CRLF and sh would fail
+*.sh text eol=lf

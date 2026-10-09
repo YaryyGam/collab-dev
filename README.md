@@ -6,7 +6,7 @@
 
 *Claude не пишет код, пока разработчик сам не предложил подход, не объяснил свой выбор,<br>не сравнил его с альтернативами и не подтвердил решение своими словами.*
 
-`Claude Code ≥ 2.1.271` · `Python 3.9+` · `macOS / Linux / WSL`
+`Claude Code ≥ 2.1.271` · `Python 3.9+` · `macOS / Linux / Windows (Git Bash или WSL)`
 
 </div>
 
@@ -127,7 +127,9 @@ claude --plugin-dir ./plugins/collab
 
 Должна появиться строка вида `[collab] режим=collaborative стадия=discussing (запись заблокирована до /collab:agree)`.
 
-> **Требования:** Claude Code ≥ 2.1.271 (выбор режима списком в `/config`), `python3` в `PATH` (только стандартная библиотека). На Windows используйте WSL — хуки вызывают `python3`.
+> **Требования:** Claude Code ≥ 2.1.271 (выбор режима списком в `/config`) и Python 3.9+ (только стандартная библиотека). Хуки запускаются через `scripts/run_hook.sh`, который сам находит `python3`, `python` или `py -3`.
+>
+> **Windows** (в том числе VS Code на Windows): нужны **Git for Windows** (через его Git Bash Claude Code выполняет хуки) и Python 3.9+ с python.org или из Microsoft Store. Через WSL плагин работает как на Linux. ⚠️ Поддержка нативной Windows в версии 0.2.0 написана, но **на реальной Windows ещё не проверялась** — проверьте `/collab:status` и попробуйте попросить Claude создать файл до `/collab:agree`: запись должна быть заблокирована.
 
 ---
 
@@ -257,6 +259,8 @@ claude plugin eval . --tag implementation --ablation none --scaffold --allow-too
 | `/collab:agree` отклонён | Пересказ короче минимума (6 слов). Опишите подход и причину |
 | Bash-команда чтения заблокирована | Ложное срабатывание эвристики (например, `>` в аргументе без кавычек). Сообщите — команду можно добавить в исключения в `gate.json`; Claude может использовать Read/Grep |
 | Сообщение «внутренняя ошибка хука, запись заблокирована» | Сбой скрипта — блокировка намеренно закрывается при ошибке. Запустите с `COLLAB_DEBUG=1` (см. ниже) и сообщите; временно — отключите плагин в `/plugin` |
+| Windows: Claude пишет файлы до `/collab:agree`, `/collab:status` не показывает строку `[collab]` | Хуки не запустились. Проверьте, что установлен Git for Windows и что `python --version` или `py -3 --version` показывает 3.9+. Подробности — в debug-логе Claude Code (`claude --debug`) |
+| «collab: Python 3.9+ not found … writes are blocked» | Python не найден ни как `python3`, ни как `python`, ни как `py -3`. Установите Python 3.9+ или отключите плагин в `/plugin` |
 | Нужна «чистая» классика без текста правил в контексте | `/collab:off` выключает блокировки и процесс, но текст правил остаётся в контексте. Для 100% классики: `/plugin` → disable `collab` и перезапуск |
 
 **Отладка:** `COLLAB_DEBUG=1 claude …` — входы и ответы всех хуков пишутся в `~/.claude/plugins/data/<плагин>/debug.jsonl`; состояние сессий — в `…/sessions/<session_id>.json`.
@@ -274,6 +278,7 @@ claude plugin eval . --tag implementation --ablation none --scaffold --allow-too
 │   ├── modes/                          # learning / collaborative / review — отличия режимов
 │   ├── skills/                         # команды /collab:agree, skip, off, on, done, mode, status
 │   ├── hooks/hooks.json                # какие события вызывают скрипт
+│   ├── scripts/run_hook.sh             # запуск хуков: находит python3 / python / py -3
 │   ├── scripts/collab_gate.py          # жёсткая логика: блокировки, стадии, проверка разбора
 │   ├── config/gate.json                # настраиваемые параметры логики
 │   ├── tests/                          # unit-тесты скрипта

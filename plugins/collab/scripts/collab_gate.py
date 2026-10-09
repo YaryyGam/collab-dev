@@ -23,6 +23,8 @@ MODES = ("learning", "collaborative", "review")
 DEFAULT_MODE = "collaborative"
 # Stages in which Claude may write and the unit must end with a final review.
 OPEN_STAGES = ("agreed", "skipped")
+# Tools that run shell commands; PowerShell is Claude Code's alternative shell on Windows.
+SHELL_TOOLS = ("Bash", "PowerShell")
 
 GATE_MESSAGE = (
     "collab: запись в проект заблокирована — подход для этой единицы работы ещё не "
@@ -170,9 +172,15 @@ def _strip_literals(command: str) -> str:
     return _QUOTED.sub(" Q ", command)
 
 
+def _program_name(word: str) -> str:
+    """`/usr/bin/rm`, `C:\\Git\\usr\\bin\\RM.exe` → `rm`."""
+    name = re.split(r"[\\/]", word)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
 def _command_words(segment: str, wrappers: list) -> list:
     words = segment.split()
-    while words and (_ASSIGNMENT.match(words[0]) or os.path.basename(words[0]) in wrappers):
+    while words and (_ASSIGNMENT.match(words[0]) or _program_name(words[0]) in wrappers):
         words = words[1:]
         # `env -i` / `nice -n 5`: skip the wrapper's own flags
         while words and words[0].startswith("-"):
@@ -203,39 +211,111 @@ def bash_write_reason(command: str, config: dict) -> str | None:
             return f"перенаправление вывода в файл ({target})"
 
     for segment in _SEPARATOR.split(stripped):
-        words = _command_words(segment, cfg["wrappers"])
+        reason = _segment_write_reason(_command_words(segment, cfg["wrappers"]), command, cfg)
+        if reason:
+            return reason
+    return None
+
+
+def _segment_write_reason(words: list, raw_command: str, cfg: dict) -> str | None:
+    """Check one simple command (program + args) against the bash config lists."""
+    if not words:
+        return None
+    name = _program_name(words[0])
+    args = words[1:]
+    if name in cfg["write_commands"]:
+        return f"команда {name}"
+    flags = cfg["flag_writes"].get(name)
+    if flags and any(a in flags or ("-i" in flags and re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a)) for a in args):
+        return f"{name} с изменением файлов"
+    subs = cfg["subcommand_writes"].get(name)
+    if subs:
+        sub = _subcommand(args)
+        if sub in subs:
+            return f"{name} {sub}"
+    if name in cfg["interpreters"] or re.match(r"python3(\.\d+)?$", name) or name == "py":
+        # the code itself sits in quotes/heredoc, so search the raw command
+        for marker in cfg["inline_write_markers"]:
+            if re.search(marker, raw_command):
+                return f"код {name} с признаками записи в файл"
+    return None
+
+
+_PS_HERESTRING = re.compile(r"@(['\"])\r?\n.*?\r?\n\1@", re.S)
+_PS_SEPARATOR = re.compile(r"\|\||&&|[;|\n(){}]")
+_PS_REDIRECT = re.compile(r"(?:\d|\*)?>>?(?!&)\s*([^\s;|<>()]+)")
+
+
+def powershell_write_reason(command: str, config: dict) -> str | None:
+    """PowerShell flavour of bash_write_reason: cmdlets, aliases, .NET file APIs, redirects."""
+    ps = config["powershell"]
+    stripped = _QUOTED.sub(" Q ", _PS_HERESTRING.sub(" Q ", command))
+
+    for target in _PS_REDIRECT.findall(stripped):
+        if target.lower() not in ps["safe_redirect_targets"]:
+            return f"перенаправление вывода в файл ({target})"
+    for marker in ps["dotnet_write_markers"]:
+        if re.search(marker, command, re.I):
+            return "запись файла через .NET"
+
+    for segment in _PS_SEPARATOR.split(stripped):
+        words = segment.split()
+        while words and words[0] in ("&", "."):  # call operators
+            words = words[1:]
         if not words:
             continue
-        name = os.path.basename(words[0])
-        args = words[1:]
-        if name in cfg["write_commands"]:
+        name = _program_name(words[0])
+        args = [a.lower() for a in words[1:]]
+        if name in ps["write_commands"]:
             return f"команда {name}"
-        flags = cfg["flag_writes"].get(name)
-        if flags and any(a in flags or ("-i" in flags and re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a)) for a in args):
-            return f"{name} с изменением файлов"
-        subs = cfg["subcommand_writes"].get(name)
-        if subs:
-            sub = _subcommand(args)
-            if sub in subs:
-                return f"{name} {sub}"
-        if name in cfg["interpreters"] or re.match(r"python3(\.\d+)?$", name):
-            # the code itself sits in quotes/heredoc, so search the raw command
-            for marker in cfg["inline_write_markers"]:
-                if re.search(marker, command):
-                    return f"код {name} с признаками записи в файл"
+        flags = ps["flag_writes"].get(name)
+        if flags and any(a in flags for a in args):
+            return f"{name} с записью в файл"
+        # external programs (git, npm, python …) follow the bash rules
+        reason = _segment_write_reason(words, command, config["bash"])
+        if reason:
+            return reason
     return None
+
+
+def shell_write_reason(tool: str, command: str, config: dict) -> str | None:
+    if tool == "PowerShell":
+        return powershell_write_reason(command, config)
+    return bash_write_reason(command, config)
 
 
 # --------------------------------------------------------------------------- #
 # Event handlers
 # --------------------------------------------------------------------------- #
 
+def _native_path(path: str) -> str:
+    """On Windows, turn a Git Bash path (`/c/Users/x`) into `C:/Users/x`."""
+    m = re.match(r"^/([A-Za-z])(/.*)?$", path)
+    if os.name == "nt" and m:
+        return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+    return path
+
+
 def _is_inside(path: str, root: Path) -> bool:
     try:
-        Path(path).expanduser().resolve().relative_to(root.resolve())
+        Path(_native_path(path)).expanduser().resolve().relative_to(root.resolve())
         return True
-    except ValueError:
+    except (ValueError, OSError):
         return False
+
+
+def _mentions_path(command: str, path: Path) -> bool:
+    """Whether a shell command names `path` in any spelling: native, forward slashes,
+    Git Bash (`/c/...`) or WSL (`/mnt/c/...`); case-insensitive, as on Windows."""
+    native = str(path)
+    posix = native.replace("\\", "/")
+    spellings = {native, posix}
+    m = re.match(r"^([A-Za-z]):/(.*)$", posix)
+    if m:
+        drive, rest = m.group(1).lower(), m.group(2)
+        spellings |= {f"/{drive}/{rest}", f"/mnt/{drive}/{rest}"}
+    lowered = command.lower()
+    return any(s.lower() in lowered for s in spellings if s)
 
 
 def _context(event_name: str, text: str) -> dict:
@@ -341,7 +421,7 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     # Self-approval guard applies in every stage, including off.
     if tool in write_tools and _is_inside(_tool_path(tool_input), env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
-    if tool == "Bash" and str(env.data_dir) in (tool_input.get("command") or ""):
+    if tool in SHELL_TOOLS and _mentions_path(tool_input.get("command") or "", env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
 
     if state.stage != "discussing":
@@ -351,8 +431,8 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
         if path and not _is_inside(path, env.project_dir):
             return None  # notes, memory, scratchpad — outside the code under discussion
         return _deny(GATE_MESSAGE)
-    if tool == "Bash":
-        reason = bash_write_reason(tool_input.get("command") or "", env.config)
+    if tool in SHELL_TOOLS:
+        reason = shell_write_reason(tool, tool_input.get("command") or "", env.config)
         if reason:
             return _deny(f"{GATE_MESSAGE} (обнаружено: {reason})")
     return None
@@ -387,7 +467,7 @@ def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | N
                 # "block" does not undo the write (it already happened): it attaches the reason to
                 # the tool result as hook feedback, which the model treats as something to act on.
                 return {"decision": "block", "reason": _explain_reminder(path, env)}
-    elif tool == "Bash" and bash_write_reason(tool_input.get("command") or "", env.config):
+    elif tool in SHELL_TOOLS and shell_write_reason(tool, tool_input.get("command") or "", env.config):
         state.bash_writes += 1
     return None
 
@@ -461,8 +541,13 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
 
 def main(argv: list) -> int:
     event_name = argv[1] if len(argv) > 1 else ""
+    # Windows defaults stdio to a legacy code page (cp1251/cp1252): read and write UTF-8 explicitly.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        event = json.load(sys.stdin)
+        raw = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode("utf-8")
+        event = json.loads(raw.decode("utf-8", errors="replace") or "{}")
     except ValueError:
         event = {}
     try:
@@ -480,7 +565,8 @@ def main(argv: list) -> int:
             print(f"collab hook error ({event_name}): {exc}", file=sys.stderr)
             return 1
     if out:
-        print(json.dumps(out, ensure_ascii=False))
+        # ASCII-escaped JSON survives any console encoding; Claude Code decodes the \u escapes
+        print(json.dumps(out, ensure_ascii=True))
     return 0
 
 
