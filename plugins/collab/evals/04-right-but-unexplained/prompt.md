@@ -4,4 +4,4 @@ tags: [discussion]
 allowed_tools: [Read, Glob, Grep, Write, Edit]
 ---
 
-Нужно убрать дубликаты из списка email-адресов, сохранив порядок первого появления. Я бы сделал list(dict.fromkeys(emails)) — видел такое на StackOverflow. Но честно, не понимаю, почему это работает и почему не просто set().
+I need to remove duplicates from a list of email addresses while keeping the order of first appearance. I'd do list(dict.fromkeys(emails)) — I saw it on StackOverflow. But honestly, I don't understand why it works or why not just use set().

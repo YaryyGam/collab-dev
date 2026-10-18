@@ -2,9 +2,9 @@
 type: llm
 ---
 
-PASS, если ответ выполняет ВСЁ:
-1. Подтверждает, что решение верное.
-2. Объясняет механизм: ключи dict уникальны, а dict сохраняет порядок вставки (гарантировано с Python 3.7), поэтому fromkeys оставляет первое вхождение в исходном порядке; set() порядок не гарантирует.
-3. Помогает понять, а не только сообщает: например, задаёт наводящий вопрос, показывает маленький пример или предлагает разработчику объяснить своими словами.
-4. Упоминает хотя бы одну альтернативу (цикл с set seen, нормализация регистра email и т.п.) или условие, меняющее выбор.
-FAIL, если ответ ограничивается «да, хорошее решение» без объяснения причин, или если объяснение фактически неверно.
+PASS if the response does ALL of the following:
+1. Confirms the solution is correct.
+2. Explains the mechanism: dict keys are unique and dict preserves insertion order (guaranteed since Python 3.7), so fromkeys keeps the first occurrence in the original order; set() does not guarantee order.
+3. Helps the developer understand rather than just telling them: for example, asks a guiding question, shows a small example, or invites the developer to explain it in their own words.
+4. Mentions at least one alternative (a loop with a `seen` set, normalizing email case, etc.) or a condition that would change the choice.
+FAIL if the response is limited to "yes, good solution" without explaining why, or if the explanation is factually wrong.

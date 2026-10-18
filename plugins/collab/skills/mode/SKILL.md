@@ -1,8 +1,8 @@
 ---
 name: mode
-description: Сменить режим совместной разработки в этой сессии — learning, collaborative или review
+description: Switch the collaborative development mode for this session — learning, collaborative or review
 argument-hint: learning | collaborative | review
 disable-model-invocation: true
 ---
 
-Разработчик переключил режим совместной разработки на `$ARGUMENTS` до конца сессии. Правила режима переданы в контексте. Одной-двумя строками опиши, что изменится в работе в этом режиме, и продолжай текущую задачу по его правилам.
+The developer has switched the collaborative development mode to `$ARGUMENTS` for the rest of the session. The mode's rules are provided in the context. In one or two lines, describe what will change in this mode, and continue the current task under its rules.

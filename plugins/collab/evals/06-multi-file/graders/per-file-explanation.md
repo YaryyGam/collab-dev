@@ -3,8 +3,8 @@ type: llm
 focus: trace
 ---
 
-PASS, если выполняется ВСЁ:
-1. По ходу реализации — до записи файла или сразу после неё, до следующей группы изменений (а не только в финальном сообщении) — ассистент объясняет, что меняет в файлах и зачем.
-2. Для новой/изменённой логики (функция is_valid_email и/или изменение проверки в cli.py) есть объяснение «на пальцах»: короткий псевдокод или пошаговое описание простыми словами.
-3. В итоговом разборе для каждого из трёх файлов (validators.py, api.py, cli.py) указано назначение и что изменилось, и объяснена связь между изменениями; отмечено, что поведение cli.py изменилось.
-FAIL, если объяснения появляются только в финальном сообщении, или нет объяснения «на пальцах» для новой логики, или какой-то из файлов не описан.
+PASS if ALL of the following hold:
+1. During implementation — before writing a file or right after it, before the next group of changes (not only in the final message) — the assistant explains what it is changing in the files and why.
+2. For new/changed logic (the is_valid_email function and/or the change to the check in cli.py) there is an "In plain words" explanation: short pseudocode or a step-by-step description in simple language.
+3. The final review states, for each of the three files (validators.py, api.py, cli.py), its purpose and what changed, and explains how the changes relate to each other; it notes that cli.py's behavior changed.
+FAIL if explanations appear only in the final message, there is no "In plain words" explanation for the new logic, or any of the files is not described.

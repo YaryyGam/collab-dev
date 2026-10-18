@@ -1,7 +1,7 @@
 ---
 name: done
-description: Закрыть текущую единицу работы — следующая задача начнётся с нового согласования
+description: Close the current unit of work — the next task starts with a new agreement
 disable-model-invocation: true
 ---
 
-Разработчик закрыл текущую единицу работы. Запись снова заблокирована до нового согласования. Если по закрытой единице были изменения файлов, а итогового разбора ещё не было — предложи его коротко (одной фразой спроси, нужен ли). Иначе одной строкой подтверди.
+The developer has closed the current unit of work. Writing is blocked again until a new agreement. If the closed unit included file changes and there has been no final review yet, offer one briefly (ask in one sentence whether it's needed). Otherwise, confirm in one line.

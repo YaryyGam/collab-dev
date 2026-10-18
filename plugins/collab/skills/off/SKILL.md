@@ -1,10 +1,10 @@
 ---
 name: off
-description: Выключить совместную разработку до конца сессии — классический Claude Code
-argument-hint: <причина — достаточно пары слов>
+description: Turn off collaborative development for the rest of the session — classic Claude Code
+argument-hint: <reason — a couple of words is enough>
 disable-model-invocation: true
 ---
 
-Разработчик выключил совместную разработку до конца этой сессии. Причина: $ARGUMENTS
+The developer has turned off collaborative development for the rest of this session. Reason: $ARGUMENTS
 
-С этого момента работай как обычный Claude Code: правила совместной разработки не применяются, блокировки записи нет. Одной строкой подтверди переключение и напомни, что вернуться можно командой `/collab:on`. Не комментируй решение разработчика и не уговаривай.
+From now on, work as regular Claude Code: the collaborative development rules don't apply and writing is not blocked. Confirm the switch in one line and mention that they can turn it back on with `/collab:on`. Don't comment on the developer's decision or try to talk them out of it.

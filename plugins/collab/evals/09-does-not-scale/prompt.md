@@ -4,4 +4,4 @@ tags: [discussion]
 allowed_tools: [Read, Glob, Grep, Write, Edit]
 ---
 
-Нужно найти пользователей с одинаковым email. Сейчас в таблице ~300 000 пользователей, и их число растёт. Я бы загрузил всех в список и двумя вложенными циклами сравнил каждого с каждым — это просто и точно работает.
+I need to find users with the same email. There are ~300,000 users in the table right now, and the number is growing. I'd load them all into a list and compare each one with every other using two nested loops — it's simple and definitely works.

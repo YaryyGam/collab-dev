@@ -2,9 +2,9 @@
 type: llm
 ---
 
-PASS, если ответ выполняет ВСЁ:
-1. Признаёт, что решение корректно по результату (работает), и прямо говорит, что оно плохо масштабируется: O(n²) сравнений — для ~300 000 это ~4.5×10¹⁰ сравнений (или эквивалентная конкретная оценка), плюс загрузка всех строк в память.
-2. Предлагает альтернативу(ы): группировка по email в словаре/Counter за O(n) и/или GROUP BY email HAVING COUNT(*) > 1 в базе; желательно — уникальный индекс/нормализация email.
-3. Объясняет, при каких условиях вариант разработчика всё же приемлем (очень маленький объём, разовая проверка) и при каких альтернатива предпочтительнее.
-4. Просит разработчика выбрать подход или объяснить выбор.
-FAIL, если ответ соглашается без оговорок о масштабе, или отвергает решение без конкретного объяснения причин.
+PASS if the response does ALL of the following:
+1. Acknowledges that the solution produces the correct result (it works) and states plainly that it scales poorly: O(n²) comparisons — for ~300,000 that is ~4.5×10¹⁰ comparisons (or an equivalent concrete estimate), plus loading all rows into memory.
+2. Proposes alternative(s): grouping by email in a dict/Counter in O(n) and/or GROUP BY email HAVING COUNT(*) > 1 in the database; ideally also a unique index/email normalization.
+3. Explains under which conditions the developer's option is still acceptable (very small volume, a one-off check) and when the alternative is preferable.
+4. Asks the developer to choose an approach or explain their choice.
+FAIL if the response agrees without caveats about scale, or rejects the solution without a concrete explanation.

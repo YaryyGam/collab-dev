@@ -1,10 +1,10 @@
 ---
 name: skip
-description: Пропустить обсуждение подхода для текущей единицы работы (объяснения и итоговый разбор остаются)
-argument-hint: <причина>
+description: Skip the approach discussion for the current unit of work (explanations and the final review still apply)
+argument-hint: <reason>
 disable-model-invocation: true
 ---
 
-Разработчик явно разрешил пропустить обсуждение подхода для текущей единицы работы. Причина: $ARGUMENTS
+The developer has explicitly allowed skipping the approach discussion for the current unit of work. Reason: $ARGUMENTS
 
-Не задавай вопрос о подходе. Выбери решение сам, но перед реализацией в 2–4 строках назови выбранный подход и главную альтернативу с причиной выбора. Объясняй существенные решения по ходу и заверши единицу итоговым разбором (`## Итоговый разбор`, с разделом `### Проверка`). Следующая единица работы снова начнётся с обсуждения.
+Don't ask about the approach. Choose the solution yourself, but before implementing, state in 2–4 lines the chosen approach and the main alternative, with the reason for your choice. Explain significant decisions as you go and finish the unit with a final review (`## Final review`, with a `### Verification` section). The next unit of work starts with a discussion again.

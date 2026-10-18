@@ -1,115 +1,115 @@
-# Архитектура
+# Architecture
 
-## 1. Задача, которую решает архитектура
+## 1. The problem the architecture solves
 
-Нужно, чтобы Claude Code перед любым изменением кода прошёл с разработчиком цикл «подход разработчика → его причины → анализ решения и аргументации → альтернативы → совместный выбор → реализация с объяснениями → итоговый разбор» — и при этом:
+Before any code change, Claude Code must go through a cycle with the developer: "developer's approach → their reasons → analysis of the solution and reasoning → alternatives → joint choice → implementation with explanations → final review". At the same time:
 
-- обязательная часть (не писать код до согласия) не зависела от того, «послушается» ли модель;
-- плагин переиспользовался между проектами и стеками без переконфигурации;
-- правила менялись правкой текста, а не кода;
-- был честный выход в классический режим.
+- the mandatory part (no code before agreement) must not depend on whether the model "obeys";
+- the plugin must be reusable across projects and stacks without reconfiguration;
+- rules must be changed by editing text, not code;
+- there must be an honest way back to the classic mode.
 
-## 2. Какие механизмы Claude Code рассматривались
+## 2. Claude Code mechanisms considered
 
-| Механизм | Что умеет | Контролирует или влияет | Роль в плагине |
+| Mechanism | What it does | Enforces or influences | Role in the plugin |
 |---|---|---|---|
-| **Output style** (`force-for-plugin`) | Инструкции, отправляемые с каждым запросом; включается автоматически вместе с плагином | 💬 Влияет. Документация прямо говорит: стиль не принуждается | **Центральные правила процесса** |
-| **Skills** (`/plugin:skill`) | Инструкции, загружаемые по вызову; `disable-model-invocation` запрещает вызов моделью | 💬 Влияет (текст) / 🔒 кто может вызвать — контролирует | Команды `/collab:*` |
-| **Hook `PreToolUse`** | Перед вызовом инструмента; `permissionDecision: deny` отменяет вызов в любом режиме разрешений | 🔒 Контролирует | Блокировка записи до согласования, защита файлов состояния |
-| **Hook `UserPromptExpansion`** | Срабатывает, только когда **человек набрал** slash-команду; может отклонить её | 🔒 Контролирует | Приём согласования и переключений — граница доверия |
-| **Hook `UserPromptSubmit`** | Перед каждым сообщением; добавляет контекст. Срабатывает и на отчёты subagent'ов и сообщения других сессий | 💬 Влияет (контекст) | Строка статуса в каждом сообщении |
-| **Hook `SessionStart`** | Начало/возобновление/компакция сессии; добавляет контекст | 💬 Влияет | Правила режима, инициализация состояния |
-| **Hook `PostToolUse`** | После инструмента; `decision: block` прикладывает замечание к результату (запись не отменяет — она уже произошла) | 💬 Влияет (напоминание срабатывает детерминированно, ответ на него — модель). Канал `block` выбран вместо `additionalContext`: с `additionalContext` в проверке Claude напоминание игнорировал | Учёт изменений; после первого изменения файла — напоминание объяснить его с псевдокодом «на пальцах» |
-| **Hook `Stop`** | Перед завершением ответа; `decision: block` заставляет продолжить (лимит — 8 подряд) | 🔒 Контролирует *факт продолжения*; содержание — нет | Требование итогового разбора с «Проверкой» |
-| Prompt/agent hooks | Решение принимает модель-судья | 💬 Вероятностно, добавляет задержку и стоимость | **Не используются** (см. §4) |
-| CLAUDE.md в плагине | Не загружается из плагинов | — | Не применимо |
-| `userConfig` | Типизированные настройки плагина, список выбора в `/config` | — | Режим по умолчанию |
-| `claude plugin eval` | Изолированные `claude -p`-прогоны, сравнение с/без плагина, граферы | Измеряет | Проверка 12 сценариев |
+| **Output style** (`force-for-plugin`) | Instructions sent with every request; enabled automatically with the plugin | 💬 Influences. The docs say explicitly: the style is not enforced | **Core process rules** |
+| **Skills** (`/plugin:skill`) | Instructions loaded on invocation; `disable-model-invocation` forbids the model from invoking them | 💬 Influences (text) / 🔒 enforces who may invoke | `/collab:*` commands |
+| **Hook `PreToolUse`** | Before a tool call; `permissionDecision: deny` cancels the call in any permission mode | 🔒 Enforces | Blocking writes until agreement, protecting state files |
+| **Hook `UserPromptExpansion`** | Fires only when **a human typed** a slash command; can reject it | 🔒 Enforces | Accepting agreement and switches — the trust boundary |
+| **Hook `UserPromptSubmit`** | Before each message; adds context. Also fires on subagent reports and messages from other sessions | 💬 Influences (context) | Status line in every message |
+| **Hook `SessionStart`** | Session start/resume/compaction; adds context | 💬 Influences | Mode rules, state initialization |
+| **Hook `PostToolUse`** | After a tool; `decision: block` attaches a note to the result (does not cancel the write — it has already happened) | 💬 Influences (the reminder fires deterministically; the response to it is up to the model). The `block` channel was chosen over `additionalContext`: in testing, Claude ignored the reminder delivered via `additionalContext` | Change tracking; after the first change to a file — a reminder to explain it with "In plain words" pseudocode |
+| **Hook `Stop`** | Before the response ends; `decision: block` forces continuation (limit: 8 in a row) | 🔒 Enforces *that it continues*; not the content | Requiring a final review with "Verification" |
+| Prompt/agent hooks | A judge model makes the decision | 💬 Probabilistic, adds latency and cost | **Not used** (see §4) |
+| CLAUDE.md in a plugin | Not loaded from plugins | — | Not applicable |
+| `userConfig` | Typed plugin settings, a choice list in `/config` | — | Default mode |
+| `claude plugin eval` | Isolated `claude -p` runs, with/without plugin comparison, graders | Measures | Testing the 12 scenarios |
 
-## 3. Выбранная архитектура: «мягкие правила + жёсткий шлюз»
+## 3. Chosen architecture: "soft rules + hard gate"
 
 ```
                          ┌───────────────────────────────────────────────┐
-                         │   output-styles/collab.md   (каждый запрос)   │  💬 КАК вести диалог
-                         │   modes/<режим>.md          (SessionStart,    │
+                         │   output-styles/collab.md   (every request)   │  💬 HOW to run the dialogue
+                         │   modes/<mode>.md           (SessionStart,    │
                          │                              /collab:mode)    │
                          └───────────────────────────────────────────────┘
- разработчик                                   │
-     │  обычное сообщение ──► UserPromptSubmit ──► «[collab] режим=… стадия=…» в контекст
+ developer                                     │
+     │  regular message ──► UserPromptSubmit ──► "[collab] mode=… stage=…" into context
      │                                                                         │
-     │  /collab:agree … ───► UserPromptExpansion ──► проверка аргументов ──► sessions/<id>.json
-     │  /collab:skip|off|on|done|mode                  (block при ошибке)          ▲    │
+     │  /collab:agree … ───► UserPromptExpansion ──► validate arguments ──► sessions/<id>.json
+     │  /collab:explain|skip|off|on|done|mode          (block on error)            ▲    │
      │                                                                             │    │
- Claude ── Write/Edit/Bash ──► PreToolUse ──► стадия discussing? ──► deny ─────────┘    │
-                                         └──► файлы состояния? ──► deny (всегда)        │
-        ── после записи ────► PostToolUse ──► +1 изменение; новый файл? ──► «объясни + псевдокод»
-        ── конец ответа ────► Stop ──► изменения без разбора? ──► block «допиши разбор» │
-                                  └──► есть «Итоговый разбор» + «Проверка» ──► закрыть единицу
+ Claude ── Write/Edit/Bash ──► PreToolUse ──► stage discussing? ──► deny ──────────┘    │
+                                         └──► state files? ──► deny (always)            │
+        ── after write ─────► PostToolUse ──► +1 change; new file? ──► "explain + pseudocode"
+        ── end of response ─► Stop ──► changes without review? ──► block "write the review"
+                                  └──► has "Final review" + "Verification" ──► close unit
 ```
 
-**Принцип разделения:** всё, что можно проверить механически (порядок шагов, кто дал согласие, наличие разбора), проверяет код. Всё, что требует суждения (качество анализа, уместность вопросов, глубина объяснений), задаёт текст правил, а измеряют eval-сценарии.
+**Separation principle:** anything that can be checked mechanically (step order, who gave agreement, presence of a review) is checked by code. Anything that needs judgment (quality of analysis, relevance of questions, depth of explanations) is set by the rules text and measured by eval scenarios.
 
-### Состояние
+### State
 
-`${CLAUDE_PLUGIN_DATA}/sessions/<session_id>.json` — режим, стадия (`discussing | agreed | skipped | off`), текст согласования, изменённые файлы, счётчик закрытых единиц. Отдельный файл на сессию: параллельные сессии не мешают друг другу; `CLAUDE_PLUGIN_DATA` переживает обновления плагина. Запись атомарная (`os.replace`).
+`${CLAUDE_PLUGIN_DATA}/sessions/<session_id>.json` — mode, stage (`discussing | agreed | skipped | off`), agreement text, changed files, count of closed units. One file per session: parallel sessions don't interfere; `CLAUDE_PLUGIN_DATA` survives plugin updates. Writes are atomic (`os.replace`).
 
-`${CLAUDE_PLUGIN_DATA}/journal.jsonl` — локальный журнал переключений (`agree/skip/off/on/done/mode`). Никуда не отправляется.
+`${CLAUDE_PLUGIN_DATA}/journal.jsonl` — a local log of switches (`agree/skip/off/on/done/mode`). Never sent anywhere.
 
-### Граница доверия: почему согласие нельзя подделать «изнутри»
+### Trust boundary: why agreement can't be forged "from inside"
 
-1. Стадию меняет только хук `UserPromptExpansion`, а он срабатывает только на команду, **набранную человеком** (не на вызов Skill-инструмента моделью и не на сообщения subagent'ов).
-2. Skills `/collab:*` помечены `disable-model-invocation: true` — Claude не может их вызвать.
-3. `PreToolUse` во всех стадиях запрещает Write/Edit по путям внутри `CLAUDE_PLUGIN_DATA` и Bash-команды, упоминающие этот путь.
+1. Only the `UserPromptExpansion` hook changes the stage, and it fires only on a command **typed by a human** (not on the model calling the Skill tool, and not on subagent messages).
+2. The `/collab:*` skills are marked `disable-model-invocation: true` — Claude can't invoke them.
+3. In every stage, `PreToolUse` forbids Write/Edit on paths inside `CLAUDE_PLUGIN_DATA` and Bash commands that mention that path.
 
-Остаточный риск — Bash-команда, которая пишет в файл состояния, не называя путь явно (например, через переменные). Он покрыт только правилом в output style («не обходи блокировку») — см. [LIMITATIONS.md](LIMITATIONS.md).
+The residual risk is a Bash command that writes to the state file without naming the path explicitly (e.g. via variables). It is covered only by a rule in the output style ("don't bypass the block"); see [LIMITATIONS.md](LIMITATIONS.md).
 
-### Отказоустойчивость
+### Fault tolerance
 
-- Ошибка скрипта в `PreToolUse` → **deny** (fail closed): баг не должен молча открывать запись.
-- Ошибка в остальных событиях → неблокирующая ошибка, работа продолжается (fail open): сломанный учёт не должен останавливать разработчика.
-- Нечитаемый файл состояния → состояние по умолчанию (`discussing`), т.е. снова закрыто.
+- Script error in `PreToolUse` → **deny** (fail closed): a bug must not silently open writes.
+- Error in other events → non-blocking error, work continues (fail open): broken tracking must not stop the developer.
+- Unreadable state file → default state (`discussing`), i.e. closed again.
 
-### Код: `scripts/collab_gate.py`
+### Code: `scripts/collab_gate.py`
 
-Один модуль, вызываемый с именем события. Обработчики — чистые функции `decide_*(event, state, env)`, которые не трогают диск и stdout, поэтому тестируются напрямую. `main()` → `run()` отвечают за ввод-вывод и состояние.
+One module, invoked with the event name. Handlers are pure functions `decide_*(event, state, env)` that don't touch disk or stdout, so they are tested directly. `main()` → `run()` handle I/O and state.
 
-| Элемент | Ответственность |
+| Element | Responsibility |
 |---|---|
-| `Env` (dataclass) | Где работаем: каталог данных, корень проекта, конфиг, режим по умолчанию. В тестах подставляется временный |
-| `SessionState` (dataclass) | Состояние сессии; `open_unit()` / `close_unit()` — единственные переходы между единицами работы |
-| `powershell_write_reason()` / `shell_write_reason()` | То же для PowerShell: командлеты и их сокращения, `-OutFile`, .NET-методы записи, перенаправления; `shell_write_reason` выбирает эвристику по имени инструмента |
-| `bash_write_reason()` | Эвристика «похожа ли Bash-команда на запись»: вырезает heredoc и строки в кавычках, режет по `; && \|`, проверяет перенаправления, команды, флаги, подкоманды, inline-код интерпретаторов. Все списки — в `config/gate.json` |
-| `decide_session_start` | Новое состояние для `startup/clear`, сохранение для `resume/compact`; контекст режима |
-| `decide_user_prompt` | Строка статуса (кроме `/collab:*`, для них статус даёт `decide_command`) |
-| `decide_command` | Разбор `/collab:*`: валидация аргументов, смена стадии, записи журнала |
-| `decide_pre_tool_use` | Защита состояния + шлюз записи |
-| `decide_post_tool_use` | Учёт изменений в открытой единице; при первом изменении файла — напоминание об объяснении «на пальцах» (режимы — `explain_after_write_modes` в `gate.json`) |
-| `decide_stop` | Требование итогового разбора, закрытие единицы |
+| `Env` (dataclass) | Where we run: data directory, project root, config, default mode. Tests substitute a temporary one |
+| `SessionState` (dataclass) | Session state; `open_unit()` / `close_unit()` are the only transitions between units of work |
+| `powershell_write_reason()` / `shell_write_reason()` | The same for PowerShell: cmdlets and their aliases, `-OutFile`, .NET write methods, redirections; `shell_write_reason` picks the heuristic by tool name |
+| `bash_write_reason()` | Heuristic for "does this Bash command look like a write": strips heredocs and quoted strings, splits on `; && \|`, checks redirections, commands, flags, subcommands, inline interpreter code. All lists live in `config/gate.json` |
+| `decide_session_start` | New state for `startup/clear`, kept for `resume/compact`; mode context |
+| `decide_user_prompt` | Status line (except for `/collab:*`, whose status comes from `decide_command`) |
+| `decide_command` | Parsing `/collab:*`: argument validation, stage change, journal entries |
+| `decide_pre_tool_use` | State protection + write gate |
+| `decide_post_tool_use` | Change tracking in the open unit; on the first change to a file — a reminder to explain it "In plain words" (modes: `explain_after_write_modes` in `gate.json`) |
+| `decide_stop` | Requiring the final review, closing the unit |
 
-**Почему Python и стандартная библиотека:** читаемый код для команды, встроенные `json`/`re`/`unittest`, без зависимостей и установки. Альтернатива `bash + jq` короче, но хуже читается и тестируется, а `jq` есть не везде.
+**Why Python and the standard library:** readable code for the team, built-in `json`/`re`/`unittest`, no dependencies or installation. The `bash + jq` alternative is shorter but harder to read and test, and `jq` isn't available everywhere.
 
-**Запуск через `scripts/run_hook.sh`:** интерпретатор называется по-разному (`python3` на macOS/Linux, `python` или `py -3` на Windows, где `python3` бывает ярлыком Microsoft Store). Обёртка один раз проверяет кандидатов (`python -c` с проверкой версии ≥ 3.9) и кэширует найденную команду в `${CLAUDE_PLUGIN_DATA}/python-command`, дальше — только `command -v`, без лишнего запуска Python. Нет Python → для `PreToolUse` запись запрещается (fail closed). Цена: на Windows нужен Git Bash — Claude Code выполняет shell-хуки через него.
+**Launching via `scripts/run_hook.sh`:** the interpreter has different names (`python3` on macOS/Linux, `python` or `py -3` on Windows, where `python3` may be a Microsoft Store shortcut). The wrapper checks the candidates once (`python -c` with a version check ≥ 3.9) and caches the found command in `${CLAUDE_PLUGIN_DATA}/python-command`; after that it only runs `command -v`, with no extra Python launch. No Python → writes are denied for `PreToolUse` (fail closed). The cost: Windows needs Git Bash, since Claude Code runs shell hooks through it.
 
-**Windows:** `PowerShell` — второй shell-инструмент (`SHELL_TOOLS`), для него своя эвристика `powershell_write_reason` (раздел `powershell` в `gate.json`); stdin/stdout — явно UTF-8, вывод JSON — ASCII-escaped; пути нормализуются (`_native_path`, `_mentions_path`).
+**Windows:** `PowerShell` is the second shell tool (`SHELL_TOOLS`), with its own heuristic `powershell_write_reason` (the `powershell` section in `gate.json`); stdin/stdout are explicitly UTF-8, JSON output is ASCII-escaped; paths are normalized (`_native_path`, `_mentions_path`).
 
-**Почему один скрипт, а не шесть:** у всех событий общие состояние, конфиг и формат ответа; один модуль не дублирует их.
+**Why one script instead of six:** all events share state, config and response format; one module avoids duplicating them.
 
-## 4. Рассмотренные и отклонённые варианты
+## 4. Options considered and rejected
 
-| Вариант | Почему отклонён |
+| Option | Why rejected |
 |---|---|
-| **A. Только инструкции** (output style / skill / CLAUDE.md) | Не выполняет главное требование «ничего не пишем до согласия»: под давлением («просто напиши код») модель иногда пишет сразу. Инструкции остаются, но как слой качества, а не контроля |
-| **C. Шлюз + LLM-судья** (prompt/agent hooks оценивают «настоящее ли было обсуждение») | Судья сам ошибается → ложные блокировки раздражают команду; задержка и стоимость на каждое сообщение; качество обсуждения лучше всех оценивает сам разработчик. Вместо судьи — пересказ своими словами в `/collab:agree` |
-| **Согласие кодовым словом** («согласовано») | Через неделю превращается в рефлекторное «ок». Пересказ ≥ 6 слов делает вход в реализацию упражнением на понимание |
-| **Граница единицы работы по путям файлов** (`/collab:agree` перечисляет разрешённые файлы) | Надёжнее, но мешает на практике: заранее не угадать, что придётся поправить тест или конфиг. Выбрана граница «по итоговому разбору» + правило о несвязанных задачах |
-| **Объяснения только правилом в тексте** | Проверка показала: правило «объясняй до записи» модель дважды проигнорировала (ручной прогон и eval-сценарий 06) — записала несколько файлов молча и объяснила всё только в итоговом разборе |
-| **«Сначала объясни»: отклонять первую запись в каждый файл, пока Claude не напишет объяснение** | Единственный вариант, гарантирующий текст *до* изменения, но: лишний круг на каждый файл, строка «blocked by hook» в терминале, срабатывает даже когда Claude уже объяснил (хук не видит текст ответа). Разработчик выбрал более плавный вариант — напоминание после записи + псевдокод «на пальцах» |
-| **Выключатель между сессиями** | Разработчики, которым плагин нужнее всего, остались бы в классике навсегда. Выбрано: только до конца сессии, с причиной |
-| **Подмешивать правила режима в каждое сообщение** | Текст накапливается в контексте и тратит токены. Режим подаётся при старте/компакции/смене, статус — короткой строкой |
-| **Правила в SessionStart-контексте вместо output style** | Тогда `/collab:off` мог бы их «убрать» только для новых сессий, но после компакции правила пришлось бы переподавать, а позиция в системном промпте у output style сильнее. Output style с `keep-coding-instructions: true` добавляет процесс, не убирая стандартные инженерные инструкции Claude Code |
+| **A. Instructions only** (output style / skill / CLAUDE.md) | Fails the main requirement "nothing gets written before agreement": under pressure ("just write the code") the model sometimes writes right away. Instructions remain, but as a quality layer, not a control layer |
+| **C. Gate + LLM judge** (prompt/agent hooks judge "was it a real discussion") | The judge makes mistakes itself → false blocks annoy the team; latency and cost on every message; the developer is the best judge of discussion quality. Instead of a judge — a restatement in their own words in `/collab:agree` |
+| **Agreement by keyword** ("agreed") | Within a week it becomes a reflexive "ok". A restatement of ≥ 6 words turns entering implementation into a comprehension exercise |
+| **Unit-of-work boundary by file paths** (`/collab:agree` lists allowed files) | More reliable, but gets in the way in practice: you can't predict up front that a test or config will need a fix. Chosen instead: a boundary "at the final review" + a rule about unrelated tasks |
+| **Explanations only as a rule in text** | Testing showed the model ignored the "explain before writing" rule twice (manual run and eval scenario 06): it wrote several files silently and explained everything only in the final review |
+| **"Explain first": reject the first write to each file until Claude writes an explanation** | The only option that guarantees text *before* the change, but: an extra round-trip per file, a "blocked by hook" line in the terminal, and it fires even when Claude has already explained (the hook can't see the response text). The developer chose a smoother option: a post-write reminder + "In plain words" pseudocode |
+| **Off switch across sessions** | Developers who need the plugin most would stay in classic mode forever. Chosen: only until end of session, with a reason |
+| **Inject mode rules into every message** | The text piles up in context and wastes tokens. The mode is delivered at start/compaction/switch; the status as a short line |
+| **Rules in SessionStart context instead of an output style** | Then `/collab:off` could "remove" them only for new sessions, and after compaction the rules would have to be re-delivered; an output style also has a stronger position in the system prompt. An output style with `keep-coding-instructions: true` adds the process without removing Claude Code's standard engineering instructions |
 
-## 5. Переиспользуемость
+## 5. Reusability
 
-- Ничего не привязано к стеку: правила говорят «изучи структуру, стек, соглашения проекта», а примеры конструкций (генераторы, DI, ORM) — лишь ориентиры для глубины объяснений.
-- Распространение — git-репозиторий-витрина; подключение в проекте — две строки в `.claude/settings.json`.
-- Настройки разработчика (`default_mode`) хранятся у разработчика, а не в проекте.
+- Nothing is tied to a stack: the rules say "study the project's structure, stack and conventions", and the example constructs (generators, DI, ORM) are only guides for explanation depth.
+- Distribution is a git marketplace repository; enabling it in a project takes two lines in `.claude/settings.json`.
+- Developer settings (`default_mode`) are stored with the developer, not in the project.

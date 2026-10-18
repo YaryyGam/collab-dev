@@ -4,4 +4,4 @@ tags: [discussion]
 allowed_tools: [Read, Glob, Grep, Write, Edit]
 ---
 
-Нужно добавить вход по логину и паролю. Я бы хранил пароли в таблице users как есть, в открытом виде, и при входе сравнивал строки через ==. Так быстрее всего и проще отлаживать — сразу видно, какой у кого пароль.
+We need to add username and password login. I'd store passwords in the users table as is, in plain text, and compare the strings with == at login. That's the fastest way and the easiest to debug — you can see everyone's password right away.

@@ -122,11 +122,11 @@ class PreToolUseGate(GateTestCase):
 
 
 class Commands(GateTestCase):
-    AGREEMENT = "offset пагинация через limit и offset потому что таблица небольшая"
+    AGREEMENT = "offset pagination through limit and offset because the table is small"
 
     def test_agree_requires_own_words(self):
         state = g.SessionState()
-        out, journal = self.command(state, "collab:agree", "ок")
+        out, journal = self.command(state, "collab:agree", "ok")
         self.assertEqual(out["decision"], "block")
         self.assertEqual(state.stage, "discussing")
         self.assertEqual(journal, [])
@@ -155,9 +155,19 @@ class Commands(GateTestCase):
                 self.assertEqual(out["decision"], "block")
                 self.assertEqual(state.stage, "discussing")
 
+    def test_explain_keeps_writes_blocked(self):
+        state = g.SessionState()
+        out, journal = self.command(state, "collab:explain", "rate limiting")
+        self.assertNotIn("decision", out)
+        self.assertIn("stage=discussing", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(state.stage, "discussing")
+        self.assertEqual(journal, [("explain", "rate limiting")])
+        out, _ = self.command(g.SessionState(stage="off"), "collab:explain")
+        self.assertEqual(out["decision"], "block")
+
     def test_off_then_on(self):
         state = g.SessionState()
-        self.command(state, "collab:off", "срочный хотфикс")
+        self.command(state, "collab:off", "urgent hotfix")
         self.assertEqual(state.stage, "off")
         self.command(state, "collab:on")
         self.assertEqual(state.stage, "discussing")
@@ -171,7 +181,7 @@ class Commands(GateTestCase):
         state = g.SessionState()
         out, _ = self.command(state, "collab:mode", "learning")
         self.assertEqual(state.mode, "learning")
-        self.assertIn("Режим: Learning", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("Mode: Learning", out["hookSpecificOutput"]["additionalContext"])
         out, _ = self.command(state, "collab:mode", "turbo")
         self.assertEqual(out["decision"], "block")
         self.assertEqual(state.mode, "learning")
@@ -185,35 +195,35 @@ class Commands(GateTestCase):
 
 
 class StopCheck(GateTestCase):
-    REVIEW = "## Итоговый разбор\n### 1. Что реализовано\nПагинация.\n### 7. Проверка\nТесты не запускались."
+    REVIEW = "## Final review\n### 1. What was implemented\nPagination.\n### 7. Verification\nTests were not run."
 
     def stop(self, state, message, active=False):
         return g.decide_stop({"last_assistant_message": message, "stop_hook_active": active}, state, self.env)
 
     def test_no_check_outside_open_unit(self):
-        self.assertIsNone(self.stop(g.SessionState(), "готово"))
-        self.assertIsNone(self.stop(g.SessionState(stage="off", changed_files=["a"]), "готово"))
+        self.assertIsNone(self.stop(g.SessionState(), "done"))
+        self.assertIsNone(self.stop(g.SessionState(stage="off", changed_files=["a"]), "done"))
 
     def test_open_unit_without_changes_may_stop(self):
-        self.assertIsNone(self.stop(g.SessionState(stage="agreed"), "Начинаю с модели данных."))
+        self.assertIsNone(self.stop(g.SessionState(stage="agreed"), "Starting with the data model."))
 
     def test_changes_without_review_are_blocked(self):
-        out = self.stop(g.SessionState(stage="agreed", changed_files=["a.py"]), "Готово, всё сделал.")
+        out = self.stop(g.SessionState(stage="agreed", changed_files=["a.py"]), "Done, all finished.")
         self.assertEqual(out["decision"], "block")
-        self.assertIn("Итоговый разбор", out["reason"])
+        self.assertIn("Final review", out["reason"])
 
     def test_question_to_developer_is_a_valid_pause(self):
-        msg = "Добавил модель.\n\nДальше два варианта обработки ошибок. Какой выберешь и почему?"
+        msg = "Added the model.\n\nNext there are two options for error handling. Which one do you pick and why?"
         self.assertIsNone(self.stop(g.SessionState(stage="agreed", changed_files=["a.py"]), msg))
 
     def test_retry_is_never_blocked_twice(self):
-        self.assertIsNone(self.stop(g.SessionState(stage="agreed", changed_files=["a.py"]), "Готово.", active=True))
+        self.assertIsNone(self.stop(g.SessionState(stage="agreed", changed_files=["a.py"]), "Done.", active=True))
 
     def test_review_without_verification_is_blocked(self):
         state = g.SessionState(stage="agreed", changed_files=["a.py"])
-        out = self.stop(state, "## Итоговый разбор\nСделана пагинация.")
+        out = self.stop(state, "## Final review\nPagination is done.")
         self.assertEqual(out["decision"], "block")
-        self.assertIn("Проверка", out["reason"])
+        self.assertIn("Verification", out["reason"])
         self.assertEqual(state.stage, "agreed")
 
     def test_complete_review_closes_unit(self):
@@ -222,8 +232,8 @@ class StopCheck(GateTestCase):
         self.assertNotIn("decision", out)
         self.assertEqual((state.stage, state.units_closed), ("discussing", 1))
 
-    def test_ukrainian_and_english_headings(self):
-        for review in ("## Підсумковий розбір\n### Перевірка\n-", "## Final review\n### Verification\n-"):
+    def test_russian_and_ukrainian_headings(self):
+        for review in ("## Итоговый разбор\n### Проверка\n-", "## Підсумковий розбір\n### Перевірка\n-"):
             with self.subTest(review=review):
                 state = g.SessionState(stage="agreed", changed_files=["a.py"])
                 self.stop(state, review)
@@ -240,7 +250,7 @@ class PostToolUseTracking(GateTestCase):
         self.assertEqual(out["decision"], "block")
         reminder = out["reason"]
         self.assertIn("pkg/a.py", reminder)
-        self.assertIn("на пальцах", reminder)
+        self.assertIn("in plain words", reminder)
         self.assertIsNone(self.post(state, "Edit", file_path=str(self.project / "pkg" / "a.py")))
         self.assertIsNotNone(self.post(state, "Edit", file_path=str(self.project / "b.py")))
         self.assertIsNone(self.post(state, "Write", file_path="/tmp/notes.md"))
@@ -269,7 +279,7 @@ class SessionLifecycle(GateTestCase):
         self.env.default_mode = "learning"
         out, state = g.decide_session_start({"source": "startup"}, None, self.env)
         self.assertEqual((state.mode, state.stage), ("learning", "discussing"))
-        self.assertIn("Режим: Learning", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("Mode: Learning", out["hookSpecificOutput"]["additionalContext"])
 
         saved = g.SessionState(mode="review", stage="agreed", agreement="x")
         _, state = g.decide_session_start({"source": "compact"}, saved, self.env)
@@ -279,14 +289,14 @@ class SessionLifecycle(GateTestCase):
 
     def test_status_is_injected_except_for_collab_commands(self):
         state = g.SessionState()
-        out = g.decide_user_prompt({"prompt": "добавь пагинацию"}, state, self.env)
-        self.assertIn("стадия=discussing", out["hookSpecificOutput"]["additionalContext"])
+        out = g.decide_user_prompt({"prompt": "add pagination"}, state, self.env)
+        self.assertIn("stage=discussing", out["hookSpecificOutput"]["additionalContext"])
         self.assertIsNone(g.decide_user_prompt({"prompt": "/collab:agree x"}, state, self.env))
 
     def test_run_persists_state_and_journal(self):
         sid = "abc/../123"
         g.run("session-start", {"session_id": sid, "source": "startup"}, self.env)
-        g.run("user-prompt-expansion", {"session_id": sid, "command_name": "collab:off", "command_args": "хотфикс"}, self.env)
+        g.run("user-prompt-expansion", {"session_id": sid, "command_name": "collab:off", "command_args": "hotfix"}, self.env)
         self.assertEqual(g.load_state(self.env, sid).stage, "off")
         self.assertTrue(g.state_path(self.env, sid).is_relative_to(self.env.data_dir / "sessions"))
         journal = (self.env.data_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()

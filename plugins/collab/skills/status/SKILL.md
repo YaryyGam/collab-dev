@@ -1,7 +1,7 @@
 ---
 name: status
-description: Показать режим, стадию и текущее согласование совместной разработки
+description: Show the collaborative development mode, stage and current agreement
 disable-model-invocation: true
 ---
 
-Покажи разработчику состояние совместной разработки из строки `[collab]` в контексте: режим, стадию, текст согласования (если есть), число изменений в текущей единице. Затем одной строкой — что нужно сделать дальше на этой стадии (например, «предложить подход и обосновать его», «подтвердить его через /collab:agree», «дождаться итогового разбора»). Доступные команды: `/collab:agree`, `/collab:skip`, `/collab:done`, `/collab:mode`, `/collab:off`, `/collab:on`.
+Show the developer the collaborative development state from the `[collab]` line in the context: mode, stage, agreement text (if any), number of changes in the current unit. Then, in one line, what needs to happen next at this stage (for example, "propose an approach and justify it", "confirm it with /collab:agree", "wait for the final review"). Available commands: `/collab:agree`, `/collab:explain`, `/collab:skip`, `/collab:done`, `/collab:mode`, `/collab:off`, `/collab:on`.

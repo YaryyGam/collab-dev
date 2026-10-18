@@ -27,15 +27,15 @@ OPEN_STAGES = ("agreed", "skipped")
 SHELL_TOOLS = ("Bash", "PowerShell")
 
 GATE_MESSAGE = (
-    "collab: запись в проект заблокирована — подход для этой единицы работы ещё не "
-    "согласован. Продолжи обсуждение: подход разработчика → его причины → анализ → "
-    "альтернативы → совместный выбор. Запись откроется, когда разработчик сам выполнит "
-    "/collab:agree <подход своими словами>, или /collab:skip <причина>, или /collab:off "
-    "<причина>. Не пытайся обойти блокировку другим способом."
+    "collab: writing to the project is blocked: the approach for this unit of work has not been "
+    "agreed on yet. Continue the discussion: the developer's approach → their reasons → analysis → "
+    "alternatives → joint choice. Writing opens once the developer runs "
+    "/collab:agree <the approach in their own words>, or /collab:skip <reason>, or /collab:off "
+    "<reason> themselves. Do not try to get around the block some other way."
 )
 SELF_PROTECT_MESSAGE = (
-    "collab: файлы состояния плагина может менять только разработчик через команды "
-    "/collab:*. Не изменяй их."
+    "collab: only the developer may change the plugin's state files, through the /collab:* "
+    "commands. Do not modify them."
 )
 
 
@@ -136,15 +136,15 @@ def append_journal(env: Env, session_id: str, event: str, detail: str = "") -> N
 def status_line(state: SessionState) -> str:
     if state.stage == "off":
         return (
-            f"[collab] режим={state.mode} стадия=off — плагин выключен разработчиком до конца "
-            "сессии. Работай как обычный Claude Code; правила совместной разработки не применяются."
+            f"[collab] mode={state.mode} stage=off: the developer turned the plugin off for the rest of "
+            "the session. Work as regular Claude Code; the collaborative development rules do not apply."
         )
-    gate = "запись заблокирована до /collab:agree" if state.stage == "discussing" else "запись разрешена"
-    line = f"[collab] режим={state.mode} стадия={state.stage} ({gate})"
+    gate = "writes blocked until /collab:agree" if state.stage == "discussing" else "writes allowed"
+    line = f"[collab] mode={state.mode} stage={state.stage} ({gate})"
     if state.stage == "agreed":
-        line += f"\nСогласовано разработчиком: «{state.agreement}»"
+        line += f"\nAgreed by the developer: \"{state.agreement}\""
     if state.stage == "skipped":
-        line += f"\nОбсуждение пропущено по просьбе разработчика: «{state.agreement}». Объяснения по ходу и итоговый разбор обязательны."
+        line += f"\nDiscussion skipped at the developer's request: \"{state.agreement}\". Explanations along the way and the final review are mandatory."
     return line
 
 
@@ -208,7 +208,7 @@ def bash_write_reason(command: str, config: dict) -> str | None:
 
     for target in _REDIRECT.findall(stripped):
         if target not in cfg["safe_redirect_targets"]:
-            return f"перенаправление вывода в файл ({target})"
+            return f"output redirected to a file ({target})"
 
     for segment in _SEPARATOR.split(stripped):
         reason = _segment_write_reason(_command_words(segment, cfg["wrappers"]), command, cfg)
@@ -224,10 +224,10 @@ def _segment_write_reason(words: list, raw_command: str, cfg: dict) -> str | Non
     name = _program_name(words[0])
     args = words[1:]
     if name in cfg["write_commands"]:
-        return f"команда {name}"
+        return f"command {name}"
     flags = cfg["flag_writes"].get(name)
     if flags and any(a in flags or ("-i" in flags and re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a)) for a in args):
-        return f"{name} с изменением файлов"
+        return f"{name} modifying files"
     subs = cfg["subcommand_writes"].get(name)
     if subs:
         sub = _subcommand(args)
@@ -237,7 +237,7 @@ def _segment_write_reason(words: list, raw_command: str, cfg: dict) -> str | Non
         # the code itself sits in quotes/heredoc, so search the raw command
         for marker in cfg["inline_write_markers"]:
             if re.search(marker, raw_command):
-                return f"код {name} с признаками записи в файл"
+                return f"{name} code that looks like it writes a file"
     return None
 
 
@@ -253,10 +253,10 @@ def powershell_write_reason(command: str, config: dict) -> str | None:
 
     for target in _PS_REDIRECT.findall(stripped):
         if target.lower() not in ps["safe_redirect_targets"]:
-            return f"перенаправление вывода в файл ({target})"
+            return f"output redirected to a file ({target})"
     for marker in ps["dotnet_write_markers"]:
         if re.search(marker, command, re.I):
-            return "запись файла через .NET"
+            return "file write through .NET"
 
     for segment in _PS_SEPARATOR.split(stripped):
         words = segment.split()
@@ -267,10 +267,10 @@ def powershell_write_reason(command: str, config: dict) -> str | None:
         name = _program_name(words[0])
         args = [a.lower() for a in words[1:]]
         if name in ps["write_commands"]:
-            return f"команда {name}"
+            return f"command {name}"
         flags = ps["flag_writes"].get(name)
         if flags and any(a in flags for a in args):
-            return f"{name} с записью в файл"
+            return f"{name} writing to a file"
         # external programs (git, npm, python …) follow the bash rules
         reason = _segment_write_reason(words, command, config["bash"])
         if reason:
@@ -368,29 +368,35 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
 
     if name == "agree":
         if state.stage == "off":
-            return _block("collab выключен в этой сессии (/collab:off). Включите его командой /collab:on."), []
+            return _block("collab is off in this session (/collab:off). Turn it back on with /collab:on."), []
         if len(args.split()) < min_words:
             return _block(
-                f"Опишите своими словами выбранный подход и почему он выбран (не меньше {min_words} слов). "
-                "Например: /collab:agree offset-пагинация с limit/offset, потому что таблица маленькая и нужна навигация по номерам страниц"
+                f"Describe the chosen approach and why it was chosen in your own words (at least {min_words} words). "
+                "For example: /collab:agree offset pagination with limit/offset, because the table is small and we need navigation by page number"
             ), []
         state.open_unit("agreed", args)
-        note = ("Разработчик подтвердил подход. Сверь пересказ с обсуждением: если он расходится с договорённостью "
-                "или упускает существенное — коротко укажи на это, прежде чем писать код. Затем реализуй, "
-                "объясняя решения по ходу.")
+        note = ("The developer confirmed the approach. Check the restatement against the discussion: if it diverges from "
+                "what was agreed or misses something significant, point that out briefly before writing code. Then implement, "
+                "explaining decisions along the way.")
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("agree", args)]
 
     if name == "skip":
         if not args:
-            return _block("Укажите причину пропуска обсуждения: /collab:skip <причина>"), []
+            return _block("Give a reason for skipping the discussion: /collab:skip <reason>"), []
         state.open_unit("skipped", args)
         return _context("UserPromptExpansion", status_line(state)), [("skip", args)]
 
     if name == "off":
         if not args:
-            return _block("Укажите причину (достаточно пары слов): /collab:off <причина>. Действует до конца сессии."), []
+            return _block("Give a reason (a couple of words is enough): /collab:off <reason>. Applies until the end of the session."), []
         state.open_unit("off", args)
         return _context("UserPromptExpansion", status_line(state)), [("off", args)]
+
+    if name == "explain":
+        if state.stage == "off":
+            return _block("collab is off in this session (/collab:off). Turn it back on with /collab:on."), []
+        # options only: the stage stays as is, so writes remain blocked until /collab:agree
+        return _context("UserPromptExpansion", status_line(state)), [("explain", args)]
 
     if name == "on":
         state.open_unit("discussing")
@@ -398,16 +404,16 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
 
     if name == "done":
         state.close_unit()
-        return _context("UserPromptExpansion", "Единица работы закрыта разработчиком.\n\n" + status_line(state)), [("done", "")]
+        return _context("UserPromptExpansion", "The developer closed the unit of work.\n\n" + status_line(state)), [("done", "")]
 
     if name == "mode":
         if args not in MODES:
-            return _block(f"Режим: /collab:mode <{'|'.join(MODES)}>. Сейчас: {state.mode}."), []
+            return _block(f"Mode: /collab:mode <{'|'.join(MODES)}>. Current: {state.mode}."), []
         state.mode = args
         return _context("UserPromptExpansion", mode_rules(env, args) + "\n\n" + status_line(state)), [("mode", args)]
 
     if name == "status":
-        info = f"{status_line(state)}\nИзменений в текущей единице: {state.changes}; закрыто единиц за сессию: {state.units_closed}."
+        info = f"{status_line(state)}\nChanges in the current unit: {state.changes}; units closed this session: {state.units_closed}."
         return _context("UserPromptExpansion", info), []
 
     return None, []
@@ -434,7 +440,7 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if tool in SHELL_TOOLS:
         reason = shell_write_reason(tool, tool_input.get("command") or "", env.config)
         if reason:
-            return _deny(f"{GATE_MESSAGE} (обнаружено: {reason})")
+            return _deny(f"{GATE_MESSAGE} (detected: {reason})")
     return None
 
 
@@ -444,12 +450,12 @@ def _explain_reminder(path: str, env: Env) -> str:
     except ValueError:
         shown = path
     return (
-        f"collab: изменён файл {shown}. Прежде чем вызывать следующий инструмент, напиши разработчику "
-        "объяснение этого изменения (если ещё не написал): что изменилось в файле и зачем, и для каждой "
-        "новой или изменённой функции — карточка по «Формату объяснения кода» "
-        "(параметры, результат, используемые функции и почему они, «на пальцах» — псевдокод 3–8 строк "
-        "простыми словами); глубина — по режиму. Для механической правки (импорт, переименование) хватит "
-        "одной фразы. Если уже объяснил — не повторяй."
+        f"collab: file {shown} changed. Before calling the next tool, write the developer an "
+        "explanation of this change (if you have not yet): what changed in the file and why, and for each "
+        "new or changed function, a card following the \"Code explanation format\" "
+        "(parameters, result, the functions used and why them, \"in plain words\": 3–8 lines of pseudocode "
+        "in plain language); depth per the mode. For a mechanical edit (import, rename) one sentence "
+        "is enough. If you already explained it, do not repeat yourself."
     )
 
 
@@ -486,20 +492,20 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     if re.search(env.config["review_heading_pattern"], message, re.M):
         if not retrying and not re.search(env.config["verification_heading_pattern"], message, re.M):
             return _block(
-                "collab: в итоговом разборе нет раздела «### Проверка». Допиши его: какие тесты и "
-                "проверки реально запускались и с каким результатом, что осталось непроверенным. "
-                "Если тесты не запускались — так и напиши.",
+                "collab: the final review has no \"### Verification\" section. Add it: which tests and "
+                "checks were actually run and with what result, what remains unverified. "
+                "If tests were not run, say so.",
                 "Stop",
             )
         state.close_unit()
-        return {"systemMessage": "collab: единица работы закрыта. Следующая задача начнётся с обсуждения подхода."}
+        return {"systemMessage": "collab: unit of work closed. The next task will start with a discussion of the approach."}
 
     if state.changes == 0 or retrying or _ends_with_question(message):
         return None
     return _block(
-        f"collab: в этой единице работы изменено файлов/команд: {state.changes}, но нет итогового разбора. "
-        "Если работа завершена — дай «## Итоговый разбор» по правилам (с разделом «### Проверка»). "
-        "Если не завершена — продолжай или закончи сообщение вопросом к разработчику.",
+        f"collab: {state.changes} file(s)/command(s) changed in this unit of work, but there is no final review. "
+        "If the work is finished, give a \"## Final review\" per the rules (with a \"### Verification\" section). "
+        "If not, continue, or end the message with a question to the developer.",
         "Stop",
     )
 
@@ -559,8 +565,8 @@ def main(argv: list) -> int:
     except Exception as exc:  # noqa: BLE001 — a hook must answer, whatever broke
         if event_name == "pre-tool-use":
             # The gate fails closed: a bug must not silently open writes.
-            out = _deny(f"collab: внутренняя ошибка хука ({exc}); запись заблокирована. "
-                        "Сообщи разработчику — обойти можно, отключив плагин (/plugin).")
+            out = _deny(f"collab: internal hook error ({exc}); writing is blocked. "
+                        "Tell the developer: it can be bypassed by disabling the plugin (/plugin).")
         else:
             print(f"collab hook error ({event_name}): {exc}", file=sys.stderr)
             return 1

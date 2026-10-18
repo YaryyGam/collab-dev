@@ -1,55 +1,55 @@
-# Известные ограничения
+# Known limitations
 
-Честный список того, что плагин **не** гарантирует. Механизмы делятся на две группы:
+An honest list of what the plugin does **not** guarantee. Mechanisms fall into two groups:
 
-- 🔒 **контролируют** — Claude Code сам выполняет решение хука, модель не может его обойти обычным путём;
-- 💬 **влияют** — текст правил, который повышает вероятность нужного поведения, но не гарантирует его.
+- 🔒 **enforce** — Claude Code itself executes the hook's decision; the model can't bypass it through normal means;
+- 💬 **influence** — rules text that makes the desired behavior more likely but doesn't guarantee it.
 
-## Жёсткий шлюз записи
+## Hard write gate
 
-| # | Ограничение | Последствие | Что сделано / что можно сделать |
+| # | Limitation | Consequence | What was done / what you can do |
 |---|---|---|---|
-| 1 | Запись через Bash распознаётся **эвристикой** | Пропускается: `python script.py` / `make` / `npm run x`, если скрипт сам пишет файлы; `>|`; запись через переменные (`$CMD > f` ловится, `eval "$X"` — нет). Ложные срабатывания: `>` вне кавычек в аргументе, запись в `/tmp` через `mkdir`/`cp` в стадии `discussing` | Списки команд и маркеров — в `config/gate.json`. Правило в output style запрещает обходить блокировку. Полное решение — запрет Bash целиком до согласования (не выбрано: Claude не сможет запускать тесты и `git diff` во время обсуждения) |
-| 2 | Шлюз смотрит только на инструменты `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `PowerShell` | Запись через MCP-инструменты (например, файловый MCP-сервер) не блокируется | Добавить имена инструментов в `write_tools` в `gate.json` и в matcher в `hooks/hooks.json` |
-| 3 | «Внутри проекта» = внутри `CLAUDE_PROJECT_DIR` | Если Claude Code запущен из домашнего каталога, «проектом» считается весь `~` | Запускайте Claude Code из корня проекта |
-| 4 | Защита файлов состояния ищет путь к каталогу данных в тексте Bash-команды | Команда, собирающая путь динамически, не будет распознана | Остаточный риск; закрыт только правилом «не обходи блокировку» |
-| 5 | Ошибка скрипта в `PreToolUse` закрывает запись | Если сломан Python или скрипт — блокируется вся запись | Сознательный выбор (fail closed). Выход — отключить плагин в `/plugin`. Если Python 3.9+ не найден, `run_hook.sh` тоже блокирует запись. Если не запускается сам `sh` (Windows без Git Bash), Claude Code считает это неблокирующей ошибкой → запись **открыта** |
-| 6 | Hooks, запущенные с `disableAllHooks` или в организациях с `allowManagedHooksOnly` | Плагин превращается в набор инструкций без шлюза | Для обязательного применения в организации включите плагин через managed settings `enabledPlugins` |
+| 1 | Writes via Bash are detected by a **heuristic** | Missed: `python script.py` / `make` / `npm run x` when the script writes files itself; `>\|`; writes via variables (`$CMD > f` is caught, `eval "$X"` is not). False positives: an unquoted `>` inside an argument, writing to `/tmp` via `mkdir`/`cp` in the `discussing` stage | Command and marker lists live in `config/gate.json`. A rule in the output style forbids bypassing the block. The full solution is banning Bash entirely until agreement (not chosen: Claude couldn't run tests or `git diff` during the discussion) |
+| 2 | The gate only watches the `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `PowerShell` tools | Writes via MCP tools (e.g. a filesystem MCP server) are not blocked | Add the tool names to `write_tools` in `gate.json` and to the matcher in `hooks/hooks.json` |
+| 3 | "Inside the project" = inside `CLAUDE_PROJECT_DIR` | If Claude Code is started from the home directory, all of `~` counts as the "project" | Start Claude Code from the project root |
+| 4 | State-file protection looks for the data directory path in the Bash command text | A command that builds the path dynamically won't be detected | Residual risk; covered only by the "don't bypass the block" rule |
+| 5 | A script error in `PreToolUse` closes writes | If Python or the script is broken, all writes are blocked | A deliberate choice (fail closed). Way out: disable the plugin in `/plugin`. If Python 3.9+ isn't found, `run_hook.sh` also blocks writes. If `sh` itself doesn't start (Windows without Git Bash), Claude Code treats it as a non-blocking error → writes are **open** |
+| 6 | Hooks run with `disableAllHooks`, or in organizations with `allowManagedHooksOnly` | The plugin becomes a set of instructions with no gate | For mandatory use in an organization, enable the plugin via the managed settings `enabledPlugins` |
 
-## Согласование и единица работы
+## Agreement and the unit of work
 
-| # | Ограничение | Последствие |
+| # | Limitation | Consequence |
 |---|---|---|
-| 7 | `/collab:agree` проверяет **длину** пересказа (≥ 6 слов), а не смысл | Можно написать бессмыслицу. Claude по правилам сверяет пересказ с обсуждением и указывает на расхождения — но это 💬 |
-| 8 | Смысловую границу единицы работы («это уже другая задача») определяет модель | Пока единица открыта, Claude может начать несвязанную задачу без нового согласования, если не заметит смену темы. Жёсткая граница — только итоговый разбор и `/collab:done` |
-| 9 | Пауза vs. завершение в `Stop` различаются эвристикой: «последний абзац содержит `?`» | Сообщение-отчёт без вопроса посреди работы заставит Claude дописать разбор (и тем закрыть единицу раньше времени); риторический вопрос в конце позволит закончить без разбора |
-| 10 | `Stop` блокирует не больше одного раза подряд (`stop_hook_active`) | Если Claude после возврата всё равно не дал разбор, ответ завершится без него. Сделано, чтобы не зациклить сессию |
-| 11 | Наличие разделов «Итоговый разбор» и «Проверка» проверяется по заголовкам | Содержание разделов (честность про тесты, полнота) — 💬. Заголовки на RU/UK/EN, шаблоны — в `gate.json` |
-| 12 | `UserPromptExpansion` с matcher'ом по имени не используется — скрипт сам фильтрует `collab:*` | Скрипт вызывается на каждую slash-команду (десятки миллисекунд) |
+| 7 | `/collab:agree` checks the **length** of the restatement (≥ 6 words), not its meaning | You can write nonsense. Per the rules, Claude compares the restatement with the discussion and points out discrepancies — but that is 💬 |
+| 8 | The semantic unit-of-work boundary ("this is a different task now") is decided by the model | While a unit is open, Claude may start an unrelated task without a new agreement if it doesn't notice the topic change. The only hard boundaries are the final review and `/collab:done` |
+| 9 | `Stop` tells a pause from completion by a heuristic: "the last paragraph contains `?`" | A status-report message without a question mid-work will make Claude write the review (and thus close the unit early); a rhetorical question at the end lets it finish without a review |
+| 10 | `Stop` blocks no more than once in a row (`stop_hook_active`) | If Claude still doesn't give a review after being sent back, the response ends without one. This avoids looping the session |
+| 11 | The presence of the "Final review" and "Verification" sections is checked by headings | Section content (honesty about tests, completeness) is 💬. Headings are accepted in English, Russian and Ukrainian (`Final review\|Итоговый разбор\|Підсумковий розбір`, `Verification\|Проверка\|Перевірка`); the patterns are in `gate.json` |
+| 12 | `UserPromptExpansion` with a name matcher isn't used — the script filters `collab:*` itself | The script is invoked on every slash command (tens of milliseconds) |
 
-## Поведение модели (💬)
+## Model behavior (💬)
 
-| # | Ограничение |
+| # | Limitation |
 |---|---|
-| 13 | Все этапы диалога — запрос подхода разработчика, вопрос о причинах, оценка аргументации, альтернативы, объяснения **до** записи, адаптация к уровню, соразмерность — задаются текстом output style. Модель может отступать, особенно в длинных сессиях после компакции (правила режима переподаются при компакции, сам output style остаётся в системном промпте) |
-| 14 | Объяснения по ходу реализации обеспечиваются напоминанием **после** первого изменения каждого файла (хук `PostToolUse`). Значит: (а) объяснение появляется после изменения, а не до него — заранее повлиять на конкретную правку разработчик может, только если сам остановит Claude (Esc); (б) Claude часто пишет несколько файлов одним пакетом (подряд или параллельными вызовами) — напоминание приходит после пачки, и объяснение появляется после неё, обычно только для последнего файла; (в) содержание объяснения, карточек и псевдокода — 💬: «на пальцах» для простых функций Claude иногда пропускает. Измерено: до введения напоминания Claude в двух проверках записывал файлы молча и объяснял всё только в итоговом разборе; с напоминанием (`PostToolUse` → `decision: block`) и форматом карточек объяснение по ходу появлялось в 4 из 4 прогонов, но поштучно перед каждым файлом — в 1 из 4. Если нужна гарантия «объяснение до каждого файла» — вариант «сначала объясни» (отклонять первую запись в файл), см. ARCHITECTURE §4 |
-| 15 | `/collab:off` выключает шлюз и процесс, но текст output style остаётся в контексте — модель получает указание его игнорировать. Для 100% классики — отключить плагин |
-| 16 | Другие плагины и CLAUDE.md проекта тоже влияют на модель. Конфликтующие инструкции (например, «всегда сразу реализуй») ослабят процесс |
+| 13 | All dialogue stages — asking for the developer's approach, asking for reasons, assessing the reasoning, alternatives, explanations **before** writing, adapting to the developer's level, proportionality — are set by the output style text. The model may drift, especially in long sessions after compaction (mode rules are re-delivered on compaction; the output style itself stays in the system prompt) |
+| 14 | Explanations during implementation rely on a reminder **after** the first change to each file (the `PostToolUse` hook). This means: (a) the explanation comes after the change, not before it — the developer can influence a specific edit beforehand only by stopping Claude themselves (Esc); (b) Claude often writes several files in one batch (sequentially or via parallel calls) — the reminder arrives after the batch, and the explanation appears after it, usually only for the last file; (c) the content of explanations, cards and pseudocode is 💬: Claude sometimes skips "In plain words" for simple functions. Measured: before the reminder was introduced, Claude wrote files silently in two tests and explained everything only in the final review; with the reminder (`PostToolUse` → `decision: block`) and the card format, explanations during implementation appeared in 4 of 4 runs, but one per file before each file in only 1 of 4. If you need a guarantee of "an explanation before every file", use the "explain first" option (reject the first write to a file); see ARCHITECTURE §4 |
+| 15 | `/collab:off` disables the gate and the process, but the output style text stays in context — the model is told to ignore it. For 100% classic behavior, disable the plugin |
+| 16 | Other plugins and the project's CLAUDE.md also influence the model. Conflicting instructions (e.g. "always implement right away") will weaken the process |
 
-## Проверка
+## Testing
 
-| # | Ограничение |
+| # | Limitation |
 |---|---|
-| 17 | `claude plugin eval` отправляет одно сообщение. Многоходовые сценарии (разработчик уже предложил решение) смоделированы как одно сообщение «задача + решение + причина»; сценарии реализации начинаются сразу с `/collab:agree`, без предшествующего обсуждения |
-| 18 | LLM-граферы недетерминированы; для статистически значимого результата нужны ≥ 3 прогона на сценарий (по умолчанию). Результаты в [ACCEPTANCE.md](ACCEPTANCE.md) — по 1 прогону, это сигнал, а не доказательство |
-| 19 | Eval-прогоны изолированы от личных плагинов разработчика; в реальной сессии чужие плагины могут менять поведение |
+| 17 | `claude plugin eval` sends a single message. Multi-turn scenarios (the developer has already proposed a solution) are modeled as one "task + solution + reason" message; implementation scenarios start directly with `/collab:agree`, with no prior discussion |
+| 18 | LLM graders are non-deterministic; a statistically meaningful result needs ≥ 3 runs per scenario (the default). Results in [ACCEPTANCE.md](ACCEPTANCE.md) are from 1 run — a signal, not proof |
+| 19 | Eval runs are isolated from the developer's personal plugins; in a real session other plugins may change behavior |
 
-## Платформы
+## Platforms
 
-| # | Ограничение |
+| # | Limitation |
 |---|---|
-| 20 | **Нативная Windows поддерживается с версии 0.2.0, но на реальной Windows не проверялась.** Что сделано: `run_hook.sh` находит `python3` / `python` / `py -3` и отсеивает ярлык Microsoft Store; ввод-вывод в UTF-8 (консоль Windows по умолчанию в cp1251/cp1252); контроль инструмента `PowerShell` (командлеты, их сокращения, `-OutFile`, `[IO.File]::Write…`, перенаправления); пути `C:\…`, `C:/…`, `/c/…`, `/mnt/c/…` и регистр букв |
-| 20a | Хуки — shell-форма через `sh`: на Windows их выполняет Git Bash. **Без Git for Windows** Claude Code запускает хуки через PowerShell, `run_hook.sh` не стартует, и шлюз **открыт** (см. №5) |
-| 20b | Найденный интерпретатор запоминается в `${CLAUDE_PLUGIN_DATA}/python-command`. Если его удалить или обновить Python так, что команда исчезнет, кэш перепроверится при следующем вызове; если команда осталась, но стала другой версией Python ниже 3.9 — удалите этот файл |
-| 20c | Эвристика PowerShell, как и Bash, не видит запись внутри вызываемых скриптов (`.\build.ps1`) и через нестандартные модули |
-| 21 | Выбор режима списком в `/config` требует Claude Code ≥ 2.1.271; на более старых версиях плагин не загрузится |
+| 20 | **Native Windows is supported since version 0.2.0 but has not been tested on real Windows.** What was done: `run_hook.sh` finds `python3` / `python` / `py -3` and filters out the Microsoft Store shortcut; UTF-8 I/O (the Windows console defaults to cp1251/cp1252); control of the `PowerShell` tool (cmdlets, their aliases, `-OutFile`, `[IO.File]::Write…`, redirections); paths `C:\…`, `C:/…`, `/c/…`, `/mnt/c/…` and letter case |
+| 20a | Hooks use the shell form via `sh`: on Windows they're run by Git Bash. **Without Git for Windows**, Claude Code runs hooks through PowerShell, `run_hook.sh` doesn't start, and the gate is **open** (see #5) |
+| 20b | The found interpreter is cached in `${CLAUDE_PLUGIN_DATA}/python-command`. If you remove it or update Python so the command disappears, the cache is rechecked on the next call; if the command remains but now points to a Python version below 3.9, delete this file |
+| 20c | The PowerShell heuristic, like the Bash one, doesn't see writes inside invoked scripts (`.\build.ps1`) or via non-standard modules |
+| 21 | Choosing the mode from a list in `/config` requires Claude Code ≥ 2.1.271; on older versions the plugin won't load |
