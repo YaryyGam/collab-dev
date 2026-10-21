@@ -39,6 +39,19 @@ EDIT_ONLY_MESSAGE = (
     "Everything else stays in the shell: git, package managers, tests, rm/mv. A scratch file outside the "
     "project can be written with Write or redirected into /tmp."
 )
+PLAN_START_MESSAGE = (
+    "The developer asked for a staged plan. Create it as tasks with TaskCreate, one per stage, then stop and "
+    "show the plan: writes and starting a stage are blocked until the developer replies."
+)
+PAUSED_MESSAGE = (
+    "collab: the plan is paused for the developer: changing files and starting or finishing a stage are blocked "
+    "until they reply. Explain what was done in this stage and end your reply with a question whether to continue."
+)
+RESUMED_MESSAGE = (
+    "collab: the developer replied after a pause in the plan, so the pause is lifted. If the message means "
+    "\"go on\", start the next stage (TaskUpdate → in_progress). If it is feedback or a question, deal with it "
+    "within the current stage, explain what you changed, and end your reply with a question again."
+)
 SELF_PROTECT_MESSAGE = (
     "collab: only the developer may change the plugin's state files, through the /collab:* "
     "commands. Do not modify them."
@@ -69,6 +82,10 @@ class SessionState:
     change_anchors: dict = field(default_factory=dict)  # file → id of the tool call that first changed it
     bash_writes: int = 0
     units_closed: int = 0
+    # /collab:plan: the unit goes stage by stage, with a hard pause for the developer after each one
+    planned: bool = False
+    paused: bool = False
+    stage_anchors: dict = field(default_factory=dict)  # like change_anchors, since the last pause
 
     @property
     def changes(self) -> int:
@@ -80,6 +97,9 @@ class SessionState:
         self.changed_files = []
         self.change_anchors = {}
         self.bash_writes = 0
+        self.planned = False
+        self.paused = False
+        self.stage_anchors = {}
 
     def close_unit(self) -> None:
         if self.stage in OPEN_STAGES:
@@ -153,6 +173,9 @@ def status_line(state: SessionState) -> str:
         line += f"\nAgreed by the developer: \"{state.agreement}\""
     if state.stage == "skipped":
         line += f"\nDiscussion skipped at the developer's request: \"{state.agreement}\". Explanations along the way and the final review are mandatory."
+    if state.planned and state.stage in OPEN_STAGES:
+        line += ("\nPlan: paused, waiting for the developer's reply (changes and stage updates blocked)." if state.paused
+                 else "\nPlan: a stage is in progress; marking it completed pauses the work until the developer replies.")
     return line
 
 
@@ -421,6 +444,11 @@ def decide_user_prompt(event: dict, state: SessionState, env: Env) -> dict | Non
     # /collab:* commands get a fresh status from the expansion hook instead
     if (event.get("prompt") or "").lstrip().startswith("/collab:"):
         return None
+    if state.paused and state.stage in OPEN_STAGES:
+        # any reply lifts the pause; whether it means "go on" or "fix this" is Claude's call
+        state.paused = False
+        state.stage_anchors = {}
+        return _context("UserPromptSubmit", RESUMED_MESSAGE + "\n\n" + status_line(state))
     return _context("UserPromptSubmit", status_line(state))
 
 
@@ -432,19 +460,23 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
     args = (event.get("command_args") or "").strip()
     min_words = env.config.get("min_agree_words", 6)
 
-    if name == "agree":
+    if name in ("agree", "plan"):
         if state.stage == "off":
             return _block("collab is off in this session (/collab:off). Turn it back on with /collab:on."), []
         if len(args.split()) < min_words:
             return _block(
                 f"Describe the chosen approach and why it was chosen in your own words (at least {min_words} words). "
-                "For example: /collab:agree offset pagination with limit/offset, because the table is small and we need navigation by page number"
+                f"For example: /collab:{name} offset pagination with limit/offset, because the table is small and we need navigation by page number"
             ), []
         state.open_unit("agreed", args)
         note = ("The developer confirmed the approach. Check the restatement against the discussion: if it diverges from "
-                "what was agreed or misses something significant, point that out briefly before writing code. Then implement, "
-                "explaining decisions along the way.")
-        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("agree", args)]
+                "what was agreed or misses something significant, point that out briefly before writing code. ")
+        if name == "plan":
+            state.planned = state.paused = True  # the plan itself is the first pause: no code before the developer sees it
+            note += PLAN_START_MESSAGE
+        else:
+            note += "Then implement, explaining decisions along the way."
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
 
     if name == "skip":
         if not args:
@@ -496,6 +528,15 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if tool in SHELL_TOOLS and _mentions_path(tool_input.get("command") or "", env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
 
+    if state.stage in OPEN_STAGES and state.paused:
+        if tool in write_tools and _is_inside(_tool_path(tool_input), env.project_dir):
+            return _deny(PAUSED_MESSAGE)
+        if tool in SHELL_TOOLS:
+            reason = shell_write_reason(tool, tool_input.get("command") or "", env.config)
+            return _deny(f"{PAUSED_MESSAGE} (detected: {reason})") if reason else None
+        if tool == "TaskUpdate" and tool_input.get("status") in ("in_progress", "completed"):
+            return _deny(PAUSED_MESSAGE)
+        return None
     if state.stage in OPEN_STAGES and tool in SHELL_TOOLS:
         cwd = Path(event.get("cwd") or env.project_dir)
         reason = shell_content_write_reason(tool, tool_input.get("command") or "", cwd, env)
@@ -533,14 +574,31 @@ def _explain_reminder(path: str, env: Env) -> str:
     )
 
 
+def _stage_done_message(state: SessionState, env: Env) -> str:
+    files = ", ".join(_shown(p, env) for p in state.stage_anchors)
+    what = (f"explain each file changed in it ({files}): what changed and why, and a card for each new or changed "
+            "function following the \"Code explanation format\"" if files else "explain what was done in it")
+    return (
+        f"collab: plan stage completed. Now, in your reply to the developer, {what}. Then end your reply with a "
+        "question whether to continue with the next stage. Do not start the next stage: changes and stage "
+        "updates are blocked until the developer replies. If this was the last stage, give the final review instead."
+    )
+
+
 def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | None:
-    """Track changes in the open unit; on the first change of each file, ask for an explanation."""
+    """Track changes in the open unit; on the first change of each file, ask for an explanation.
+    In a planned unit, a stage marked completed pauses the work until the developer replies."""
     if state.stage not in OPEN_STAGES:
         return None
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input") or {}
+    if tool == "TaskUpdate" and state.planned and not state.paused and tool_input.get("status") == "completed":
+        state.paused = True
+        return {"decision": "block", "reason": _stage_done_message(state, env)}
     if tool in env.config["write_tools"]:
         path = _tool_path(tool_input)
+        if path and _is_inside(path, env.project_dir) and path not in state.stage_anchors:
+            state.stage_anchors[path] = event.get("tool_use_id") or ""
         if path and _is_inside(path, env.project_dir) and path not in state.changed_files:
             state.changed_files.append(path)
             state.change_anchors[path] = event.get("tool_use_id") or ""
@@ -640,6 +698,17 @@ def _review_problems(event: dict, state: SessionState, env: Env, message: str) -
     return problems
 
 
+def _stage_unexplained(event: dict, state: SessionState, env: Env, message: str) -> list:
+    """Files changed in this stage that neither the pause message nor an earlier text of the stage explains."""
+    min_chars = env.config.get("explain_min_chars", 200)
+    missing = [p for p in state.stage_anchors if not (len(message) >= min_chars and _names_file(message, p))]
+    if missing:
+        events = _transcript_events(event.get("transcript_path") or "") or []
+        explained = _explained_along_the_way(events, {p: state.stage_anchors[p] for p in missing}, "", env)
+        missing = [p for p in missing if p not in explained]
+    return missing
+
+
 def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     if state.stage not in OPEN_STAGES:
         return None
@@ -652,6 +721,17 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
             return _block("\n\n".join(problems), "Stop")
         state.close_unit()
         return {"systemMessage": "collab: unit of work closed. The next task will start with a discussion of the approach."}
+
+    if state.planned and state.paused:  # a pause in the plan is a valid stop once the stage is explained
+        missing = [] if retrying else _stage_unexplained(event, state, env, message)
+        if missing:
+            return _block(
+                f"collab: before pausing, explain the files changed in this stage: {', '.join(_shown(p, env) for p in missing)}. "
+                "For each: what changed and why, and a card for each new or changed function following the "
+                "\"Code explanation format\". Only text in your reply counts: your thinking is not shown.",
+                "Stop",
+            )
+        return None
 
     if state.changes == 0 or retrying or _ends_with_question(message):
         return None

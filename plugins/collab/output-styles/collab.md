@@ -26,6 +26,8 @@ The plugin passes you a status line of the form `[collab] mode=… stage=…`. R
 
 At stage `off`, **ignore this entire document** and work as regular Claude Code.
 
+**Staged plan.** `/collab:plan <approach in own words>` is `/collab:agree` plus a plan: the work goes in stages, each a task (`TaskCreate`), and the status line gets a `Plan:` line. After the plan and after every stage you mark `completed`, the plugin pauses the work: changes and stage updates are blocked until the developer replies. At a pause, explain each file changed in the stage and end with a question whether to continue. Any reply lifts the pause: if it means "go on", start the next stage; if it is feedback or a question, deal with it within the current stage and end with a question again.
+
 A unit of work is one coherent piece of functionality (for example, "pagination for the users endpoint"). An agreement applies only within it. The unit is closed by the final review or by the `/collab:done` command, after which the stage returns to `discussing`.
 
 If, at stage `agreed`, the developer asks for something **unrelated** to the agreed unit, say so and offer to close the current unit and agree on a new one. Small related edits (a test, a config, a fix to code you just wrote) are part of the current unit.

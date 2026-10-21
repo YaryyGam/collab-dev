@@ -85,7 +85,8 @@ One module, invoked with the event name. Handlers are pure functions `decide_*(e
 | `shell_content_write_reason()` | Narrower than `bash_write_reason`: does a shell command write the *contents* of a project file (redirect or `tee` into the project, `sed -i`/`perl -i`, inline interpreter writes, PowerShell `Set-Content`/`Out-File`/.NET). Lists: `edit_only` in `gate.json` |
 | `decide_pre_tool_use` | State protection + write gate; in an open unit, rejects shell writes of file contents so code changes go through Edit/Write |
 | `decide_post_tool_use` | Change tracking in the open unit (with the id of each file's first change, `change_anchors`); on the first change to a file — a reminder to explain it "In plain words" (modes: `explain_after_write_modes` in `gate.json`) |
-| `decide_stop` | Requiring the final review with "Verification" and an "Explanation by file" heading for every changed file not explained along the way (read from the session transcript), closing the unit |
+| `decide_stop` | Requiring the final review with "Verification" and an "Explanation by file" heading for every changed file not explained along the way (read from the session transcript), closing the unit; in a `/collab:plan` pause, requiring each file of the stage to be explained instead |
+| Plan mode (`planned`, `paused`, `stage_anchors` in `SessionState`) | `/collab:plan` opens the unit like `agree` and starts paused; `PostToolUse` on `TaskUpdate → completed` pauses again; while paused, `PreToolUse` denies project writes, shell writes and `TaskUpdate` to `in_progress`/`completed`; the developer's next non-command prompt (`decide_user_prompt`) lifts the pause and resets the stage's files |
 
 **Why Python and the standard library:** readable code for the team, built-in `json`/`re`/`unittest`, no dependencies or installation. The `bash + jq` alternative is shorter but harder to read and test, and `jq` isn't available everywhere.
 

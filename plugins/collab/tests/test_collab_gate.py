@@ -238,6 +238,7 @@ class StopCheck(GateTestCase):
 
     def test_russian_and_ukrainian_headings(self):
         for review in ("## Итоговый разбор\n### Объяснение по файлам\n#### a.py\n-\n### Проверка\n-",
+                       "## Итоговый обзор\n### Объяснение по файлам\n#### a.py\n-\n### Проверка\n-",
                        "## Підсумковий розбір\n### Пояснення по файлах\n#### a.py\n-\n### Перевірка\n-"):
             with self.subTest(review=review):
                 state = g.SessionState(stage="agreed", changed_files=["a.py"])
@@ -317,6 +318,101 @@ class ExplanationByFile(GateTestCase):
         self.assertIn("pkg/b.py", out["reason"])
         self.assertNotIn("decision", self.stop("## Final review\nDone.", active=True))
         self.assertEqual(self.state.stage, "discussing")
+
+
+class PlanMode(GateTestCase):
+    """/collab:plan: agreement + stages as tasks, with a hard pause for the developer after the plan and each stage."""
+
+    PLAN = "split validation into validators.py, then switch api.py and cli.py, step by step"
+
+    def setUp(self):
+        super().setUp()
+        self.a = str(self.project / "a.py")
+        self.state = g.SessionState()
+
+    def tool(self, phase, tool, call_id="", **tool_input):
+        event = {"tool_name": tool, "tool_input": tool_input, "tool_use_id": call_id, "cwd": str(self.project)}
+        handler = g.decide_pre_tool_use if phase == "pre" else g.decide_post_tool_use
+        return handler(event, self.state, self.env)
+
+    def prompt(self, text):
+        return g.decide_user_prompt({"prompt": text}, self.state, self.env)
+
+    def start_stage(self):
+        self.command(self.state, "collab:plan", self.PLAN)
+        self.prompt("looks good, go")
+        self.assertIsNone(self.tool("pre", "TaskUpdate", taskId="1", status="in_progress"))
+
+    def test_plan_needs_own_words_and_starts_paused(self):
+        out, _ = self.command(self.state, "collab:plan", "do it")
+        self.assertEqual(out["decision"], "block")
+        out, journal = self.command(self.state, "collab:plan", self.PLAN)
+        self.assertEqual((self.state.stage, self.state.planned, self.state.paused), ("agreed", True, True))
+        self.assertIn("TaskCreate", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(journal, [("plan", self.PLAN)])
+
+    def test_pause_blocks_changes_and_stage_updates_but_not_planning_or_reading(self):
+        self.command(self.state, "collab:plan", self.PLAN)
+        self.assertEqual(self.decision(self.tool("pre", "Edit", file_path=self.a)), "deny")
+        self.assertEqual(self.decision(self.tool("pre", "Bash", command="rm old.py")), "deny")
+        self.assertEqual(self.decision(self.tool("pre", "TaskUpdate", taskId="1", status="in_progress")), "deny")
+        self.assertIsNone(self.tool("pre", "TaskUpdate", taskId="1", subject="Rename"))
+        self.assertIsNone(self.tool("pre", "Bash", command="pytest -q"))
+        self.assertIsNone(self.tool("pre", "Write", file_path="/tmp/notes.md"))
+
+    def test_any_reply_lifts_the_pause_but_collab_commands_do_not(self):
+        self.command(self.state, "collab:plan", self.PLAN)
+        self.assertIsNone(self.prompt("/collab:status"))
+        self.assertTrue(self.state.paused)
+        out = self.prompt("rename the function in stage 1 first")
+        self.assertFalse(self.state.paused)
+        self.assertIn("feedback", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.tool("pre", "Edit", file_path=self.a))
+
+    def test_completed_stage_pauses_and_lists_its_files(self):
+        self.start_stage()
+        self.tool("post", "Edit", "e1", file_path=self.a)
+        out = self.tool("post", "TaskUpdate", taskId="1", status="completed")
+        self.assertTrue(self.state.paused)
+        self.assertIn("a.py", out["reason"])
+        self.assertIn("Do not start the next stage", out["reason"])
+        self.assertEqual(self.decision(self.tool("pre", "Edit", file_path=self.a)), "deny")
+
+    def test_pause_stop_requires_the_stage_files_explained(self):
+        self.start_stage()
+        self.tool("post", "Edit", "e1", file_path=self.a)
+        self.tool("post", "TaskUpdate", taskId="1", status="completed")
+        stop = lambda msg, active=False: g.decide_stop(
+            {"last_assistant_message": msg, "stop_hook_active": active}, self.state, self.env)
+        out = stop("Stage 1 is done. Continue?")
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("a.py", out["reason"])
+        self.assertIsNone(stop("Stage 1 is done. Continue?", active=True))
+        self.assertIsNone(stop("In a.py I added is_valid(), which " + "x" * 200 + "\n\nContinue with stage 2?"))
+        self.assertEqual(self.state.stage, "agreed")  # a pause, not the end of the unit
+
+    def test_next_stage_tracks_only_its_own_files(self):
+        self.start_stage()
+        self.tool("post", "Edit", "e1", file_path=self.a)
+        self.tool("post", "TaskUpdate", taskId="1", status="completed")
+        self.prompt("go on")
+        self.assertEqual(self.state.stage_anchors, {})
+        self.tool("post", "Edit", "e2", file_path=self.a)
+        self.assertEqual(self.state.stage_anchors, {self.a: "e2"})
+        self.assertEqual(self.state.change_anchors, {self.a: "e1"})
+
+    def test_final_review_on_the_last_stage_closes_the_unit(self):
+        self.start_stage()
+        self.tool("post", "Edit", "e1", file_path=self.a)
+        self.tool("post", "TaskUpdate", taskId="1", status="completed")
+        review = "## Final review\n### Explanation by file\n#### a.py\nx\n### Verification\nTests were not run."
+        g.decide_stop({"last_assistant_message": review}, self.state, self.env)
+        self.assertEqual((self.state.stage, self.state.planned, self.state.paused), ("discussing", False, False))
+
+    def test_tasks_outside_a_plan_do_not_pause(self):
+        self.command(self.state, "collab:agree", self.PLAN)
+        self.assertIsNone(self.tool("post", "TaskUpdate", taskId="1", status="completed"))
+        self.assertFalse(self.state.paused)
 
 
 class EditOnlyInOpenUnit(GateTestCase):

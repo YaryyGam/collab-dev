@@ -11,7 +11,7 @@
     "collaborative",
     "review"
   ],
-  "review_heading_pattern": "^#{1,3}\\s*(Итоговый разбор|Підсумковий розбір|Final review)\\b",
+  "review_heading_pattern": "^#{1,3}\\s*(Итоговый (разбор|обзор)|Підсумковий (розбір|огляд)|Final review)\\b",
   "verification_heading_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Проверка|Перевірка|Verification)\\b",
   "explain_section_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Объяснение по файлам|Пояснення по файлах|Explanation by file)\\b",
   "explain_min_chars": 200,

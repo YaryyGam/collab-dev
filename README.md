@@ -140,6 +140,7 @@ All commands are invoked **by a human only**: Claude cannot run them itself (`di
 | Command | What it does | Example |
 |---|---|---|
 | `/collab:agree <approach and why>` | Confirms the agreed approach **in your own words** and unlocks writing code for the current unit of work. At least 6 words are required: the restatement is the comprehension check. Claude compares it with the discussion and points out any mismatches | `/collab:agree cache the exchange rate response in Redis for 5 minutes, because the API is paid and the data rarely changes` |
+| `/collab:plan <approach and why>` | Same as `/collab:agree`, plus Claude carries the work out **stage by stage**: it creates the stages as tasks (a checklist in Claude Code), shows the plan and waits. After each stage it stops, explains every file changed in that stage and waits for your reply. Any reply lifts the pause: "go on" starts the next stage, feedback gets fixed within the current one. The pause is enforced by the hook | `/collab:plan move settings into a frozen dataclass loaded from env, then pass it explicitly to db, supplier and service, so values aren't duplicated` |
 | `/collab:explain [focus]` | For when you **don't know how to solve the task** or which approach to pick. Claude analyzes the task itself and proposes 2–4 solution options: how each works, which libraries and technologies it would use and why, pros, cons, when each wins, plus a recommendation. Writing stays blocked: you pick an option and confirm it with `/collab:agree` in your own words | `/collab:explain how to rate-limit the public API` |
 | `/collab:skip <reason>` | Skips the approach discussion **for one unit of work**. Explanations along the way and the final review remain | `/collab:skip standard CRUD following the orders pattern` |
 | `/collab:off <reason>` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
@@ -211,6 +212,7 @@ The plugin combines two kinds of mechanisms, and it is important to be honest ab
 | An explanation of each changed file during the work, with "in plain words" pseudocode | A `PostToolUse` hook adds a reminder for Claude after the first change to each file | 💬 The reminder always arrives, but in measurements Claude acted on it for only ~1 file in 8. The guarantee is the next row |
 | Every changed file is explained by the end of the unit | `Stop` hook: files without a long enough text naming them in the transcript need a `#### <file>` heading under `### Explanation by file` in the review | 🔐 Presence of a heading per file is hard (one retry); **content** is soft |
 | A final review with an honest "Verification" section | `Stop` hook → won't let Claude finish without the headings | 🔐 Presence of the sections is hard (one retry); **content** is soft |
+| `/collab:plan`: a pause after every stage, with the stage's files explained | `PostToolUse` on `TaskUpdate → completed` pauses the unit; `PreToolUse` blocks changes and stage updates until your next message; `Stop` checks that each file of the stage is named in an explanation | 🔐 The pause is hard once a stage is marked completed; **marking it** and judging whether your reply means "go on" are soft |
 | The developer's approach first, reasoning analysis, alternatives, explanations along the way, adapting to the developer's level, honesty | Output style (rules in every request) + mode context from hooks | 💬 **Soft**: raises the likelihood, doesn't guarantee it. Measured by eval scenarios |
 | "Unrelated task → new agreement" | A rule in the output style | 💬 Soft: a hook cannot judge whether tasks are related in meaning |
 
@@ -281,7 +283,7 @@ The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/
 │   ├── .claude-plugin/plugin.json      # manifest + default_mode setting in /config
 │   ├── output-styles/collab.md         # ⭐ CORE PROCESS RULES (enabled automatically)
 │   ├── modes/                          # learning / collaborative / review: mode differences
-│   ├── skills/                         # commands /collab:agree, explain, skip, off, on, done, mode, status
+│   ├── skills/                         # commands /collab:agree, plan, explain, skip, off, on, done, mode, status
 │   ├── hooks/hooks.json                # which events invoke the script
 │   ├── scripts/run_hook.sh             # hook launcher: finds python3 / python / py -3
 │   ├── scripts/collab_gate.py          # hard logic: blocking, stages, review check
