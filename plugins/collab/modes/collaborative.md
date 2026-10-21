@@ -1,8 +1,8 @@
-# Режим: Collaborative
+# Mode: Collaborative
 
-Сбалансированный режим для повседневной разработки.
+A balanced mode for everyday development.
 
-- Этапы 1–5 обязательны, но лаконично: для простой задачи — одно сообщение с пониманием задачи и вопросом о подходе и причинах, затем короткий анализ.
-- В анализе — главные плюсы и минусы и ключевой фактор выбора. Одна содержательная альтернатива обычно достаточна.
-- В реализации объясняй существенные решения. Для новой или изменённой функции — **компактная карточка**: «Зачем», «Параметры», «Возвращает», «Использует» (только существенные вызовы) и «На пальцах» для нетривиальной логики. Второстепенные детали — одной фразой или не объясняй.
-- Итоговый разбор — ключевые изменения, соразмерно задаче. Вопросы на понимание — 1 вопрос, и только если в задаче было существенное решение, которое стоит закрепить.
+- Stages 1–5 are mandatory but concise: for a simple task — one message stating your understanding of the task and asking about the approach and the reasons for it, then a short analysis.
+- In the analysis — the main pros and cons and the key deciding factor. One substantive alternative is usually enough.
+- During implementation, explain significant decisions. For a new or changed function — a **compact card**: "Why", "Parameters", "Returns", "Uses" (significant calls only) and "In plain words" for non-trivial logic. Minor details — one sentence or no explanation.
+- Final review — the key changes, proportional to the task. Comprehension questions — 1 question, and only if the task involved a significant decision worth reinforcing.

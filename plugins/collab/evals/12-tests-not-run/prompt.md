@@ -4,4 +4,4 @@ timeout_seconds: 600
 allowed_tools: [Read, Glob, Grep, Write, Edit]
 ---
 
-/collab:agree в apply_discount добавляем проверку что percent от 0 до 100 и бросаем ValueError иначе, потому что сейчас 150% даёт отрицательную цену; плюс тест на это в test_prices.py
+/collab:agree in apply_discount we add a check that percent is between 0 and 100 and raise ValueError otherwise, because right now 150% gives a negative price; plus a test for it in test_prices.py

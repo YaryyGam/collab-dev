@@ -2,9 +2,9 @@
 type: llm
 ---
 
-Разработчик уже верно объяснил asyncio.gather, Semaphore и return_exceptions.
-PASS, если ответ выполняет ВСЁ:
-1. Признаёт, что аргументация верна, и НЕ объясняет заново с нуля, что такое корутины, event loop, gather или семафор.
-2. Фокусируется на существенных тонкостях этой задачи: например, таймауты, повторные попытки, обработка результатов-исключений после gather, лимиты пула соединений httpx, память при 200 одновременно созданных задачах, альтернативы (asyncio.TaskGroup/as_completed для потоковой обработки).
-3. Предлагает хотя бы одну альтернативу или условие, меняющее выбор, и вовлекает разработчика в решение.
-FAIL, если значительная часть ответа — базовое объяснение asyncio/gather/семафоров, которое разработчик уже показал, или ответ без анализа просто соглашается.
+The developer has already correctly explained asyncio.gather, Semaphore and return_exceptions.
+PASS if the response does ALL of the following:
+1. Acknowledges that the reasoning is correct and does NOT re-explain from scratch what coroutines, the event loop, gather or a semaphore are.
+2. Focuses on the substantive subtleties of this task: for example, timeouts, retries, handling exception results after gather, httpx connection pool limits, memory with 200 tasks created at once, alternatives (asyncio.TaskGroup/as_completed for streaming processing).
+3. Proposes at least one alternative or a condition that would change the choice, and involves the developer in the decision.
+FAIL if a significant part of the response is a basic explanation of asyncio/gather/semaphores that the developer has already demonstrated, or if the response simply agrees without analysis.

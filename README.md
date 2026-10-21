@@ -2,90 +2,90 @@
 
 # 🤝 Collaborative Development
 
-**Плагин для Claude Code: сначала думает разработчик, потом пишет Claude**
+**A Claude Code plugin: the developer thinks first, then Claude writes**
 
-*Claude не пишет код, пока разработчик сам не предложил подход, не объяснил свой выбор,<br>не сравнил его с альтернативами и не подтвердил решение своими словами.*
+*Claude writes no code until the developer has proposed an approach, explained the choice,<br>compared it with alternatives and confirmed the decision in their own words.*
 
-`Claude Code ≥ 2.1.271` · `Python 3.9+` · `macOS / Linux / Windows (Git Bash или WSL)`
+`Claude Code ≥ 2.1.271` · `Python 3.9+` · `macOS / Linux / Windows (Git Bash or WSL)`
 
 </div>
 
 ---
 
-## Содержание
+## Contents
 
-- [Зачем это нужно](#-зачем-это-нужно)
-- [Как выглядит работа](#-как-выглядит-работа)
-- [Установка](#-установка)
-- [Команды](#-команды)
-- [Режимы](#-режимы)
-- [Жизненный цикл единицы работы](#-жизненный-цикл-единицы-работы)
-- [Что гарантировано, а что — нет](#-что-гарантировано-а-что--нет)
-- [Настройка и изменение правил](#-настройка-и-изменение-правил)
-- [Проверка плагина](#-проверка-плагина)
-- [Решение проблем](#-решение-проблем)
-- [Структура репозитория](#-структура-репозитория)
-
----
-
-## 💡 Зачем это нужно
-
-Обычный цикл с AI-ассистентом: *поставил задачу → Claude сам выбрал архитектуру и написал код → разработчик пролистал и принял*. Скорость растёт, но разработчик становится наблюдателем: он не принимал решений, не знает альтернатив и через неделю не может объяснить, почему код устроен именно так. Проверка готового кода почти ничего не оставляет в памяти — запоминается то, что сформулировал сам.
-
-Плагин меняет порядок:
-
-```
- Задача ─► Claude разбирается в контексте и НЕ пишет код
-        ─► Разработчик предлагает свой подход  ─► и объясняет, почему
-        ─► Claude оценивает решение И аргументацию, предлагает альтернативы, сравнивает
-        ─► Разработчик выбирает и подтверждает: /collab:agree <своими словами>
-        ─► Claude реализует, объясняя решения по ходу
-        ─► Итоговый разбор: что сделано, почему, что проверено, вопросы на понимание
-```
-
-Цель — не максимум вопросов, а **максимум осознанного участия** разработчика без потери скорости: простые задачи проходят за одно-два коротких сообщения, сложные — получают полноценное обсуждение.
+- [Why this matters](#-why-this-matters)
+- [What working with it looks like](#-what-working-with-it-looks-like)
+- [Installation](#-installation)
+- [Commands](#-commands)
+- [Modes](#-modes)
+- [Lifecycle of a unit of work](#-lifecycle-of-a-unit-of-work)
+- [What is guaranteed and what is not](#-what-is-guaranteed-and-what-is-not)
+- [Configuring and changing the rules](#-configuring-and-changing-the-rules)
+- [Testing the plugin](#-testing-the-plugin)
+- [Troubleshooting](#-troubleshooting)
+- [Repository structure](#-repository-structure)
 
 ---
 
-## 👀 Как выглядит работа
+## 💡 Why this matters
+
+The usual loop with an AI assistant: *state the task → Claude picks the architecture and writes the code → the developer skims it and accepts*. Speed goes up, but the developer becomes a spectator: they made no decisions, don't know the alternatives, and a week later can't explain why the code is built the way it is. Reviewing finished code leaves almost nothing in memory; what sticks is what you formulated yourself.
+
+The plugin changes the order:
+
+```
+ Task ─► Claude studies the context and does NOT write code
+      ─► The developer proposes their approach  ─► and explains why
+      ─► Claude evaluates the solution AND the reasoning, offers alternatives, compares
+      ─► The developer chooses and confirms: /collab:agree <in their own words>
+      ─► Claude implements, explaining decisions along the way
+      ─► Final review: what was done, why, what was verified, comprehension questions
+```
+
+The goal is not the maximum number of questions but the **maximum conscious participation** of the developer without losing speed: simple tasks take one or two short messages, complex ones get a full discussion.
+
+---
+
+## 👀 What working with it looks like
 
 <details open>
-<summary><b>Короткий пример</b> (полные примеры для всех сценариев — в <a href="docs/EXAMPLES.md">docs/EXAMPLES.md</a>)</summary>
+<summary><b>Short example</b> (full examples for every scenario are in <a href="docs/EXAMPLES.md">docs/EXAMPLES.md</a>)</summary>
 
-> **Разработчик:** Добавь пагинацию в list_users. Просто напиши код.
+> **Developer:** Add pagination to list_users. Just write the code.
 
-> **Claude:** Сейчас `list_users()` (`users.py:4`) возвращает всех 500 пользователей, тест `test_users.py:5` проверяет ровно 500.
-> Запись файлов заблокирована, пока не согласуем подход — ответь в 1–2 фразах:
-> 1. **Параметры** — `page/page_size`, `offset/limit` или курсор?
-> 2. **Что возвращать** — по-прежнему список или объект с `items/total`? От этого зависит, сломается ли текущий тест.
-> 3. **Почему** такой выбор?
+> **Claude:** Right now `list_users()` (`users.py:4`) returns all 500 users, and the test `test_users.py:5` checks for exactly 500.
+> Writing files is blocked until we agree on an approach. Answer in 1–2 sentences:
+> 1. **Parameters**: `page/page_size`, `offset/limit`, or a cursor?
+> 2. **What to return**: still a list, or an object with `items/total`? This decides whether the current test breaks.
+> 3. **Why** this choice?
 >
-> Пропустить обсуждение: `/collab:skip <причина>` (эта задача) или `/collab:off <причина>` (до конца сессии).
+> Skip the discussion: `/collab:skip <reason>` (this task) or `/collab:off <reason>` (for the rest of the session).
 
-> **Разработчик:** `/collab:agree offset и limit как необязательные параметры, по умолчанию возвращаем всех, чтобы не сломать тест и вызывающий код; данных мало, курсор не нужен`
+> **Developer:** `/collab:agree offset and limit as optional parameters, by default return everyone so the test and the calling code don't break; there is little data, so a cursor isn't needed`
 
-> **Claude:** Пересказ совпадает с договорённостью. Одно дополнение: отрицательные `offset`/`limit` срезом Python дадут неожиданный результат (`USERS[-5:]`) — буду бросать `ValueError`.
-> *…реализация с объяснениями…*
+> **Claude:** Your summary matches what we agreed. One addition: negative `offset`/`limit` would give an unexpected result via Python slicing (`USERS[-5:]`), so I'll raise `ValueError`.
+> *…implementation with explanations…*
 >
-> ## Итоговый разбор
+> ## Final review
 > …
-> ### Проверка
-> **Тесты не запускались** — запуск `pytest` требовал разрешения. Проверить: `python3 -m pytest -q`.
+> ### Verification
+> **Tests were not run**: running `pytest` required permission. To check: `python3 -m pytest -q`.
 >
-> **Вопрос на понимание:** что увидит клиент, листающий страницы через offset, если в это время добавят пользователя, — и почему курсор от этого защищает?
+> **Comprehension question:** what will a client paging through with offset see if a user is added in the meantime, and why does a cursor protect against that?
 
-*(Это реальный фрагмент проверочного прогона, слегка сокращённый.)*
+*(This is a real excerpt from a test run, slightly shortened.)*
 
 </details>
 
 ---
 
-## 🚀 Установка
+## 🚀 Installation
 
-### Вариант 1. Для всей команды через проект (рекомендуется)
+### Option 1. For the whole team, via the project (recommended)
 
-1. Опубликуйте этот репозиторий в git (GitHub, GitLab, Bitbucket — любой).
-2. В **репозитории проекта**, где работает команда, создайте или дополните `.claude/settings.json` и закоммитьте его:
+1. Publish this repository to git (GitHub, GitLab, Bitbucket, any host).
+2. In the **project repository** the team works in, create or extend `.claude/settings.json` and commit it:
 
 ```json
 {
@@ -100,201 +100,202 @@
 }
 ```
 
-Каждый разработчик, открывший проект в Claude Code, получит предложение доверить витрину и установить плагин — без ручной настройки. Для GitHub можно использовать короткую форму `"source": { "source": "github", "repo": "YaryyGam/collab-dev" }`.
+Every developer who opens the project in Claude Code will be prompted to trust the marketplace and install the plugin, with no manual setup. For GitHub you can use the short form `"source": { "source": "github", "repo": "YaryyGam/collab-dev" }`.
 
-### Вариант 2. Вручную, для себя
+### Option 2. Manually, for yourself
 
 ```text
 /plugin marketplace add https://github.com/YaryyGam/collab-dev.git
 /plugin install collab@collab-dev
 ```
 
-При установке выберите область: `user` (все ваши проекты), `project` (этот проект, через `.claude/settings.json`) или `local` (этот проект, только вы).
+During installation choose a scope: `user` (all your projects), `project` (this project, via `.claude/settings.json`) or `local` (this project, only you).
 
-### Вариант 3. Локально, для разработки самого плагина
+### Option 3. Locally, for developing the plugin itself
 
 ```bash
 claude --plugin-dir ./plugins/collab
-# после правок файлов плагина в открытой сессии:
+# after editing plugin files in an open session:
 /reload-plugins
 ```
 
-### Проверить, что всё работает
+### Check that everything works
 
 ```text
 /collab:status
 ```
 
-Должна появиться строка вида `[collab] режим=collaborative стадия=discussing (запись заблокирована до /collab:agree)`.
+You should see a line like `[collab] mode=collaborative stage=discussing (writes blocked until /collab:agree)`.
 
-> **Требования:** Claude Code ≥ 2.1.271 (выбор режима списком в `/config`) и Python 3.9+ (только стандартная библиотека). Хуки запускаются через `scripts/run_hook.sh`, который сам находит `python3`, `python` или `py -3`.
+> **Requirements:** Claude Code ≥ 2.1.271 (mode selection as a list in `/config`) and Python 3.9+ (standard library only). Hooks run via `scripts/run_hook.sh`, which finds `python3`, `python` or `py -3` on its own.
 >
-> **Windows** (в том числе VS Code на Windows): нужны **Git for Windows** (через его Git Bash Claude Code выполняет хуки) и Python 3.9+ с python.org или из Microsoft Store. Через WSL плагин работает как на Linux. ⚠️ Поддержка нативной Windows в версии 0.2.0 написана, но **на реальной Windows ещё не проверялась** — проверьте `/collab:status` и попробуйте попросить Claude создать файл до `/collab:agree`: запись должна быть заблокирована.
+> **Windows** (including VS Code on Windows): you need **Git for Windows** (Claude Code runs hooks through its Git Bash) and Python 3.9+ from python.org or the Microsoft Store. Under WSL the plugin works as on Linux. ⚠️ Native Windows support in version 0.2.0 is written but **has not yet been tested on real Windows**: check `/collab:status` and try asking Claude to create a file before `/collab:agree`; the write should be blocked.
 
 ---
 
-## ⌨️ Команды
+## ⌨️ Commands
 
-Все команды вызывает **только человек** — Claude не может выполнить их сам (`disable-model-invocation`), а хук принимает их только из набранного разработчиком сообщения.
+All commands are invoked **by a human only**: Claude cannot run them itself (`disable-model-invocation`), and the hook accepts them only from a message the developer typed.
 
-| Команда | Что делает | Пример |
+| Command | What it does | Example |
 |---|---|---|
-| `/collab:agree <подход и почему>` | Подтверждает согласованный подход **своими словами** и открывает запись кода для текущей единицы работы. Нужно минимум 6 слов — пересказ и есть проверка понимания. Claude сверяет пересказ с обсуждением и укажет на расхождения | `/collab:agree кэшируем ответ курсов валют в Redis на 5 минут, потому что API платный и данные меняются редко` |
-| `/collab:skip <причина>` | Пропускает обсуждение подхода **для одной единицы работы**. Объяснения по ходу и итоговый разбор остаются | `/collab:skip типовой CRUD по образцу orders` |
-| `/collab:off <причина>` | **Классический Claude Code до конца сессии**: без блокировок и без процесса. Новая сессия снова начнётся в режиме совместной работы | `/collab:off горит прод, хотфикс` |
-| `/collab:on` | Возвращает совместную разработку в текущей сессии | |
-| `/collab:done` | Закрывает текущую единицу работы вручную — следующая задача начнётся с нового согласования | |
-| `/collab:mode <режим>` | Меняет режим до конца сессии: `learning`, `collaborative`, `review` | `/collab:mode learning` |
-| `/collab:status` | Показывает режим, стадию, текущее согласование и что делать дальше | |
+| `/collab:agree <approach and why>` | Confirms the agreed approach **in your own words** and unlocks writing code for the current unit of work. At least 6 words are required: the restatement is the comprehension check. Claude compares it with the discussion and points out any mismatches | `/collab:agree cache the exchange rate response in Redis for 5 minutes, because the API is paid and the data rarely changes` |
+| `/collab:explain [focus]` | For when you **don't know how to solve the task** or which approach to pick. Claude analyzes the task itself and proposes 2–4 solution options: how each works, which libraries and technologies it would use and why, pros, cons, when each wins, plus a recommendation. Writing stays blocked: you pick an option and confirm it with `/collab:agree` in your own words | `/collab:explain how to rate-limit the public API` |
+| `/collab:skip <reason>` | Skips the approach discussion **for one unit of work**. Explanations along the way and the final review remain | `/collab:skip standard CRUD following the orders pattern` |
+| `/collab:off <reason>` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
+| `/collab:on` | Turns collaborative development back on in the current session | |
+| `/collab:done` | Closes the current unit of work manually; the next task starts with a new agreement | |
+| `/collab:mode <mode>` | Changes the mode for the rest of the session: `learning`, `collaborative`, `review` | `/collab:mode learning` |
+| `/collab:status` | Shows the mode, stage, current agreement and what to do next | |
 
-> 💡 Если вы совсем не понимаете, что происходит, и нужно просто сделать — `/collab:off <причина>` честно переключает в обычный режим. Все переключения пишутся в **локальный** журнал (`~/.claude/plugins/data/<плагин>/journal.jsonl`) — он никуда не отправляется и нужен вам самим: видно, какие темы стоит подтянуть.
+> 💡 If you have no idea what's going on and just need it done, `/collab:off <reason>` honestly switches to the normal mode. Every switch is written to a **local** journal (`~/.claude/plugins/data/<plugin>/journal.jsonl`). It is never sent anywhere and exists for you: it shows which topics are worth brushing up on.
 
 ---
 
-## 🎚 Режимы
+## 🎚 Modes
 
-Режим по умолчанию выбирается в **`/config` → Collaborative Development → Default collaboration mode** (сохраняется у каждого разработчика). На одну сессию — `/collab:mode`.
+The default mode is set in **`/config` → Collaborative Development → Default collaboration mode** (stored per developer). For a single session, use `/collab:mode`.
 
-| | 🎓 **Learning** | 🤝 **Collaborative** *(по умолчанию)* | 🔍 **Review** |
+| | 🎓 **Learning** | 🤝 **Collaborative** *(default)* | 🔍 **Review** |
 |---|---|---|---|
-| **Для чего** | Новая технология, сложная задача, развитие навыков | Повседневная разработка | Разработчик сам проектирует и пишет, Claude — ревьюер |
-| **Обсуждение подхода** | Подробное, с уточняющими вопросами | Обязательное, лаконичное | Разработчик предлагает реализацию целиком |
-| **Анализ аргументации** | По пунктам: верные / ошибочные предположения / неучтённое | Главные плюсы, минусы, ключевой фактор | Ошибки, неучтённые ограничения |
-| **Альтернативы** | 2, если обе содержательны | 1 содержательная | Предлагаются, но код не переписывается за разработчика |
-| **Объяснения в реализации** | Каждая новая функция, класс, нетривиальная конструкция | Существенные решения | Claude пишет код только по прямой просьбе после `/collab:agree` |
-| **Итоговый разбор** | Полный, 2–3 вопроса на понимание | Ключевые изменения, вопрос — если было важное решение | Акцент на том, что разработчик решил и исправил сам |
+| **Purpose** | New technology, a hard task, building skills | Everyday development | The developer designs and writes the code, Claude reviews |
+| **Approach discussion** | Detailed, with follow-up questions | Mandatory, concise | The developer proposes the whole implementation |
+| **Reasoning analysis** | Point by point: correct / mistaken assumptions / overlooked | Main pros, cons, the key factor | Mistakes, overlooked constraints |
+| **Alternatives** | 2, if both are substantive | 1 substantive | Offered, but the code is not rewritten for the developer |
+| **Explanations during implementation** | Every new function, class, non-trivial construct | Significant decisions | Claude writes code only on direct request after `/collab:agree` |
+| **Final review** | Full, 2–3 comprehension questions | Key changes, a question if there was an important decision | Focus on what the developer decided and fixed themselves |
 
-Блокировка записи до согласования, объяснение существенных решений и итоговый разбор действуют **во всех режимах**.
+Blocking writes until agreement, explaining significant decisions and the final review apply **in all modes**.
 
 ---
 
-## 🔄 Жизненный цикл единицы работы
+## 🔄 Lifecycle of a unit of work
 
-**Единица работы** — один связный набор функциональности («пагинация эндпоинта пользователей»). Согласование действует только внутри неё.
+A **unit of work** is one coherent piece of functionality ("pagination for the users endpoint"). An agreement is valid only within it.
 
 ```
                 ┌──────────────── /collab:on ◄─────────────────┐
                 ▼                                              │
-        ┌──────────────┐  /collab:agree <пересказ>   ┌────────┐ │
- старт ►│  discussing  │────────────────────────────►│ agreed │ │
- сессии │ запись ЗАКРЫТА│  /collab:skip <причина>     │skipped │ │
+        ┌──────────────┐  /collab:agree <summary>    ┌────────┐ │
+ start ►│  discussing  │────────────────────────────►│ agreed │ │
+session │writes BLOCKED│  /collab:skip <reason>      │skipped │ │
         └──────────────┘────────────────────────────►└────────┘ │
                 ▲                                        │      │
-                │  «## Итоговый разбор» + «### Проверка» │      │
-                └──────────── или /collab:done ◄─────────┘      │
+                │  "## Final review" + "### Verification"│      │
+                └──────────── or /collab:done ◄──────────┘      │
                                                                 │
-        /collab:off <причина> (из любой стадии) ──────►  off  ──┘
-                                               (классика до конца сессии)
+        /collab:off <reason> (from any stage) ────────►  off  ──┘
+                                            (classic until the session ends)
 ```
 
-- Пока стадия `discussing`, хук **блокирует** запись файлов проекта (`Write`, `Edit`, `NotebookEdit`) и похожие на запись Bash-команды (`>`, `rm`, `sed -i`, `git commit`, `npm install`…). Чтение, поиск, запуск тестов — разрешены всегда. Запись вне проекта (заметки, scratchpad) — разрешена.
-- После **первого** изменения каждого файла в единице работы Claude получает напоминание: объяснить, что изменилось и зачем, и показать, как это работает «на пальцах» — коротким псевдокодом. Для механических правок хватает одной фразы.
-- Если в стадии `agreed` Claude заканчивает работу **с изменениями, но без итогового разбора** и без вопроса к вам — хук возвращает его дописать разбор. Разбор с разделом «Проверка» закрывает единицу, и следующая задача снова начинается с обсуждения.
-- Если задача уходит в сторону от согласованной, Claude по правилам должен предложить закрыть единицу и согласовать новую (это поведение модели, см. ниже).
+- While the stage is `discussing`, the hook **blocks** writes to project files (`Write`, `Edit`, `NotebookEdit`) and write-like Bash commands (`>`, `rm`, `sed -i`, `git commit`, `npm install`…). Reading, searching and running tests are always allowed. Writing outside the project (notes, scratchpad) is allowed.
+- After the **first** change to each file within a unit of work, Claude gets a reminder: explain what changed and why, and show how it works "in plain words" with short pseudocode. For mechanical edits one sentence is enough.
+- If in the `agreed` stage Claude finishes **with changes but without a final review** and without a question for you, the hook sends it back to write the review. A review with a "Verification" section closes the unit, and the next task starts with a discussion again.
+- If the task drifts away from what was agreed, the rules require Claude to propose closing the unit and agreeing on a new one (this is model behavior, see below).
 
 ---
 
-## 🛡 Что гарантировано, а что — нет
+## 🛡 What is guaranteed and what is not
 
-Плагин сочетает два вида механизмов, и это важно понимать честно.
+The plugin combines two kinds of mechanisms, and it is important to be honest about the difference.
 
-| Требование | Механизм | Сила |
+| Requirement | Mechanism | Strength |
 |---|---|---|
-| Ничего не пишется в проект до согласования | Хук `PreToolUse` → `deny` для `Write`/`Edit`/`NotebookEdit` | 🔒 **Жёстко** — Claude Code сам отклоняет вызов, в любом режиме разрешений |
-| То же для записи через Bash | Хук `PreToolUse` + эвристический разбор команды | 🔐 **Жёстко, но эвристика** — типовые способы записи ловятся; изощрённые (`python script.py`, который пишет файлы) — нет |
-| Согласование даёт только человек | Хук `UserPromptExpansion` (срабатывает только на набранную человеком команду), `disable-model-invocation`, запрет записи в файлы состояния | 🔒 **Жёстко** (в пределах эвристики Bash) |
-| Согласование — это пересказ, а не «ок» | Минимум 6 слов в `/collab:agree` | 🔒 Длина — жёстко; **смысл** проверяет Claude — мягко |
-| Объяснение каждого изменённого файла по ходу работы, с псевдокодом «на пальцах» | Хук `PostToolUse` после первого изменения каждого файла добавляет Claude напоминание | 🔐 Напоминание приходит всегда; **само объяснение** — мягко. Объяснение появляется сразу **после** записи, а не до неё (осознанный выбор, см. ARCHITECTURE §4) |
-| Итоговый разбор с честным разделом «Проверка» | Хук `Stop` → не даёт закончить без заголовков | 🔐 Наличие разделов — жёстко (одна повторная попытка); **содержание** — мягко |
-| Сначала подход разработчика, анализ аргументации, альтернативы, объяснения по ходу, адаптация к уровню, честность | Output style (правила в каждом запросе) + контекст режима из хуков | 💬 **Мягко** — повышает вероятность, не гарантирует. Измеряется eval-сценариями |
-| «Не связанная задача → новое согласование» | Правило в output style | 💬 Мягко — хук не может судить о смысловой связи задач |
+| Nothing is written to the project before agreement | `PreToolUse` hook → `deny` for `Write`/`Edit`/`NotebookEdit` | 🔒 **Hard**: Claude Code itself rejects the call, in any permission mode |
+| Same for writes via Bash | `PreToolUse` hook + heuristic command parsing | 🔐 **Hard, but heuristic**: common ways of writing are caught; elaborate ones (`python script.py` that writes files) are not |
+| Only a human can give agreement | `UserPromptExpansion` hook (fires only on a command typed by a human), `disable-model-invocation`, a ban on writing to state files | 🔒 **Hard** (within the limits of the Bash heuristic) |
+| Agreement is a restatement, not "ok" | At least 6 words in `/collab:agree` | 🔒 Length is hard; Claude checks the **meaning**, which is soft |
+| An explanation of each changed file during the work, with "in plain words" pseudocode | A `PostToolUse` hook adds a reminder for Claude after the first change to each file | 🔐 The reminder always arrives; **the explanation itself** is soft. The explanation comes right **after** the write, not before it (a deliberate choice, see ARCHITECTURE §4) |
+| A final review with an honest "Verification" section | `Stop` hook → won't let Claude finish without the headings | 🔐 Presence of the sections is hard (one retry); **content** is soft |
+| The developer's approach first, reasoning analysis, alternatives, explanations along the way, adapting to the developer's level, honesty | Output style (rules in every request) + mode context from hooks | 💬 **Soft**: raises the likelihood, doesn't guarantee it. Measured by eval scenarios |
+| "Unrelated task → new agreement" | A rule in the output style | 💬 Soft: a hook cannot judge whether tasks are related in meaning |
 
-Подробно — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) и [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
 ---
 
-## 🛠 Настройка и изменение правил
+## 🛠 Configuring and changing the rules
 
-Всё поведение описано текстом и конфигом — код трогать почти никогда не нужно.
+All behavior is described in text and config; you almost never need to touch code.
 
-| Что хотите изменить | Где | Нужен ли код |
+| What you want to change | Where | Code needed? |
 |---|---|---|
-| Процесс: этапы, что спрашивать, как анализировать, формат итогового разбора | [`plugins/collab/output-styles/collab.md`](plugins/collab/output-styles/collab.md) | Нет |
-| Отличия режимов | [`plugins/collab/modes/*.md`](plugins/collab/modes) | Нет |
-| Минимальная длина `/collab:agree`, какие инструменты/Bash-команды считаются записью, заголовки итогового разбора | [`plugins/collab/config/gate.json`](plugins/collab/config/gate.json) | Нет |
-| Тексты команд и что Claude делает после них | [`plugins/collab/skills/*/SKILL.md`](plugins/collab/skills) | Нет |
-| Логика блокировок и стадий | [`plugins/collab/scripts/collab_gate.py`](plugins/collab/scripts/collab_gate.py) + тесты | Да |
+| The process: stages, what to ask, how to analyze, the final review format | [`plugins/collab/output-styles/collab.md`](plugins/collab/output-styles/collab.md) | No |
+| Differences between modes | [`plugins/collab/modes/*.md`](plugins/collab/modes) | No |
+| Minimum length of `/collab:agree`, which tools/Bash commands count as writes, final review headings | [`plugins/collab/config/gate.json`](plugins/collab/config/gate.json) | No |
+| Command texts and what Claude does after them | [`plugins/collab/skills/*/SKILL.md`](plugins/collab/skills) | No |
+| Blocking and stage logic | [`plugins/collab/scripts/collab_gate.py`](plugins/collab/scripts/collab_gate.py) + tests | Yes |
 
-После изменения: поднимите `version` в `plugin.json` (иначе установленные копии не обновятся), прогоните unit-тесты и eval. Пошаговая инструкция с примерами — [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md).
+After a change: bump `version` in `plugin.json` (otherwise installed copies won't update), run the unit tests and evals. A step-by-step guide with examples: [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md).
 
 ---
 
-## ✅ Проверка плагина
+## ✅ Testing the plugin
 
 ```bash
-# 1. Манифесты
+# 1. Manifests
 claude plugin validate ./plugins/collab && claude plugin validate .
 
-# 2. Unit-тесты жёсткой логики (блокировки, стадии, команды, Bash-эвристика) — секунды, бесплатно
+# 2. Unit tests of the hard logic (blocking, stages, commands, Bash heuristic): seconds, free
 python3 -m unittest discover -s plugins/collab/tests -v
 
-# 3. Поведенческие сценарии из ТЗ (реальные сессии Claude, стоят денег)
+# 3. Behavioral scenarios from the spec (real Claude sessions, cost money)
 cd plugins/collab
-#   сценарии обсуждения — с плагином и без него (Δ показывает вклад плагина)
+#   discussion scenarios: with and without the plugin (Δ shows the plugin's contribution)
 claude plugin eval . --tag discussion --scaffold --allow-tools Write Edit --trust-plugin --judge-model sonnet
-#   сценарии реализации — начинаются с /collab:agree, поэтому только с плагином
+#   implementation scenarios: start with /collab:agree, so plugin only
 claude plugin eval . --tag implementation --ablation none --scaffold --allow-tools Write Edit --trust-plugin --judge-model sonnet
 ```
 
-12 сценариев из ТЗ лежат в [`plugins/collab/evals/`](plugins/collab/evals), фактические результаты и обнаруженные проблемы — в [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
+The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/evals); actual results and the issues found are in [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
 
 ---
 
-## 🩺 Решение проблем
+## 🩺 Troubleshooting
 
-| Симптом | Причина и решение |
+| Symptom | Cause and fix |
 |---|---|
-| `/collab:*` нет в меню | Плагин не включён: `/plugin` → проверьте `collab@collab-dev`; после правок — `/reload-plugins` |
-| Claude пишет «запись заблокирована», хотя вы договорились | Договорённость не подтверждена командой. Выполните `/collab:agree <пересказ>` — устного «да» недостаточно |
-| `/collab:agree` отклонён | Пересказ короче минимума (6 слов). Опишите подход и причину |
-| Bash-команда чтения заблокирована | Ложное срабатывание эвристики (например, `>` в аргументе без кавычек). Сообщите — команду можно добавить в исключения в `gate.json`; Claude может использовать Read/Grep |
-| Сообщение «внутренняя ошибка хука, запись заблокирована» | Сбой скрипта — блокировка намеренно закрывается при ошибке. Запустите с `COLLAB_DEBUG=1` (см. ниже) и сообщите; временно — отключите плагин в `/plugin` |
-| Windows: Claude пишет файлы до `/collab:agree`, `/collab:status` не показывает строку `[collab]` | Хуки не запустились. Проверьте, что установлен Git for Windows и что `python --version` или `py -3 --version` показывает 3.9+. Подробности — в debug-логе Claude Code (`claude --debug`) |
-| «collab: Python 3.9+ not found … writes are blocked» | Python не найден ни как `python3`, ни как `python`, ни как `py -3`. Установите Python 3.9+ или отключите плагин в `/plugin` |
-| Нужна «чистая» классика без текста правил в контексте | `/collab:off` выключает блокировки и процесс, но текст правил остаётся в контексте. Для 100% классики: `/plugin` → disable `collab` и перезапуск |
+| `/collab:*` is not in the menu | The plugin is not enabled: `/plugin` → check `collab@collab-dev`; after edits, `/reload-plugins` |
+| Claude says "writes are blocked" even though you agreed | The agreement wasn't confirmed with the command. Run `/collab:agree <summary>`; a spoken "yes" is not enough |
+| `/collab:agree` is rejected | The summary is shorter than the minimum (6 words). Describe the approach and the reason |
+| A read-only Bash command is blocked | A false positive of the heuristic (for example, `>` in an unquoted argument). Report it: the command can be added to the exceptions in `gate.json`; Claude can use Read/Grep |
+| The message "internal hook error, writes are blocked" | The script failed; the block deliberately fails closed. Run with `COLLAB_DEBUG=1` (see below) and report it; as a workaround, disable the plugin in `/plugin` |
+| Windows: Claude writes files before `/collab:agree`, `/collab:status` doesn't show the `[collab]` line | The hooks didn't run. Check that Git for Windows is installed and that `python --version` or `py -3 --version` shows 3.9+. Details are in the Claude Code debug log (`claude --debug`) |
+| "collab: Python 3.9+ not found … writes are blocked" | Python wasn't found as `python3`, `python` or `py -3`. Install Python 3.9+ or disable the plugin in `/plugin` |
+| You need "pure" classic mode without the rules text in context | `/collab:off` turns off blocking and the process, but the rules text stays in context. For 100% classic: `/plugin` → disable `collab` and restart |
 
-**Отладка:** `COLLAB_DEBUG=1 claude …` — входы и ответы всех хуков пишутся в `~/.claude/plugins/data/<плагин>/debug.jsonl`; состояние сессий — в `…/sessions/<session_id>.json`.
+**Debugging:** `COLLAB_DEBUG=1 claude …` writes the inputs and outputs of all hooks to `~/.claude/plugins/data/<plugin>/debug.jsonl`; session state is in `…/sessions/<session_id>.json`.
 
 ---
 
-## 📁 Структура репозитория
+## 📁 Repository structure
 
 ```
 .
-├── .claude-plugin/marketplace.json     # витрина: команда подключает её одним URL
-├── plugins/collab/                     # сам плагин
-│   ├── .claude-plugin/plugin.json      # манифест + настройка default_mode в /config
-│   ├── output-styles/collab.md         # ⭐ ЦЕНТРАЛЬНЫЕ ПРАВИЛА процесса (включается автоматически)
-│   ├── modes/                          # learning / collaborative / review — отличия режимов
-│   ├── skills/                         # команды /collab:agree, skip, off, on, done, mode, status
-│   ├── hooks/hooks.json                # какие события вызывают скрипт
-│   ├── scripts/run_hook.sh             # запуск хуков: находит python3 / python / py -3
-│   ├── scripts/collab_gate.py          # жёсткая логика: блокировки, стадии, проверка разбора
-│   ├── config/gate.json                # настраиваемые параметры логики
-│   ├── tests/                          # unit-тесты скрипта
-│   └── evals/                          # 12 поведенческих сценариев из ТЗ
+├── .claude-plugin/marketplace.json     # marketplace: the team connects it with one URL
+├── plugins/collab/                     # the plugin itself
+│   ├── .claude-plugin/plugin.json      # manifest + default_mode setting in /config
+│   ├── output-styles/collab.md         # ⭐ CORE PROCESS RULES (enabled automatically)
+│   ├── modes/                          # learning / collaborative / review: mode differences
+│   ├── skills/                         # commands /collab:agree, explain, skip, off, on, done, mode, status
+│   ├── hooks/hooks.json                # which events invoke the script
+│   ├── scripts/run_hook.sh             # hook launcher: finds python3 / python / py -3
+│   ├── scripts/collab_gate.py          # hard logic: blocking, stages, review check
+│   ├── config/gate.json                # configurable logic parameters
+│   ├── tests/                          # unit tests for the script
+│   └── evals/                          # 12 behavioral scenarios from the spec
 └── docs/
-    ├── ARCHITECTURE.md                 # архитектура и обоснование выбора механизмов
-    ├── EXAMPLES.md                     # примеры диалогов по сценариям
-    ├── CUSTOMIZING.md                  # как менять правила
-    ├── LIMITATIONS.md                  # известные ограничения
-    └── ACCEPTANCE.md                   # результаты проверки по критериям приёмки
+    ├── ARCHITECTURE.md                 # architecture and rationale for the chosen mechanisms
+    ├── EXAMPLES.md                     # example dialogues by scenario
+    ├── CUSTOMIZING.md                  # how to change the rules
+    ├── LIMITATIONS.md                  # known limitations
+    └── ACCEPTANCE.md                   # results of checking against the acceptance criteria
 ```
 
 ---
 
 <div align="center">
 
-*Цель — не быстрее получить код, а чтобы каждый в команде мог объяснить, почему код устроен именно так.*
+*The goal is not to get code faster, but for everyone on the team to be able to explain why the code is built the way it is.*
 
 </div>

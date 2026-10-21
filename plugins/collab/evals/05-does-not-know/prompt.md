@@ -4,4 +4,4 @@ tags: [discussion]
 allowed_tools: [Read, Glob, Grep, Write, Edit]
 ---
 
-Нам нужно, чтобы наш HTTP API не падал, когда один клиент шлёт слишком много запросов. Я вообще не знаю, как такое делается и с чего начать.
+We need our HTTP API to not fall over when one client sends too many requests. I have no idea how this is done or where to start.

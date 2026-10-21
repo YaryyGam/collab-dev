@@ -1,100 +1,100 @@
-# Результаты проверки по критериям приёмки
+# Acceptance criteria results
 
-**Дата:** 2026-10-09 · **Claude Code:** 2.1.295 · **Модель под тестом:** по умолчанию Claude Code · **Режим:** `collaborative`
+**Date:** 2026-10-09 · **Claude Code:** 2.1.295 · **Model under test:** Claude Code default · **Mode:** `collaborative`
 
-## Как проверялось
+## How it was tested
 
-| Уровень | Что | Результат |
+| Level | What | Result |
 |---|---|---|
-| Манифесты | `claude plugin validate` для плагина и витрины | ✅ оба проходят |
-| Unit-тесты | `python3 -m unittest discover -s plugins/collab/tests` — 32 теста: шлюз по стадиям, защита состояния, команды и их валидация, логика `Stop`, Bash-эвристика (19 команд записи, 13 команд чтения), напоминание после записи, сохранение состояния, fail-closed | ✅ 32/32 |
-| Ручной прогон | `claude -p --plugin-dir` в демо-проекте: задача → блокировка → `/collab:agree` (через `--resume`) → реализация → итоговый разбор; лог хуков через `COLLAB_DEBUG=1` | ✅ весь цикл работает; найдена слабость объяснений по ходу (см. ниже) |
-| Поведенческие сценарии | 12 сценариев ТЗ в `claude plugin eval`: изолированные сессии, сравнение с прогоном без плагина (Δ) | 11/12 в финальном прогоне, см. таблицу |
+| Manifests | `claude plugin validate` for the plugin and the marketplace | ✅ both pass |
+| Unit tests | `python3 -m unittest discover -s plugins/collab/tests` — 32 tests: gate per stage, state protection, commands and their validation, `Stop` logic, Bash heuristic (19 write commands, 13 read commands), post-write reminder, state persistence, fail-closed | ✅ 32/32 |
+| Manual run | `claude -p --plugin-dir` in a demo project: task → block → `/collab:agree` (via `--resume`) → implementation → final review; hook log via `COLLAB_DEBUG=1` | ✅ the full cycle works; found a weakness in explanations during implementation (see below) |
+| Behavioral scenarios | The 12 spec scenarios in `claude plugin eval`: isolated sessions, compared against a run without the plugin (Δ) | 11/12 in the final run, see table |
 
-Всего на проверки потрачено ≈ $11 (list price).
+Total spent on testing: ≈ $11 (list price).
 
-> ⚠️ Финальные eval-результаты — **по 1 прогону на сценарий**. LLM-судья недетерминирован; для надёжной статистики запускайте с `--runs 3` (по умолчанию). Это сигнал, а не доказательство.
+> ⚠️ Final eval results are **1 run per scenario**. The LLM judge is non-deterministic; for reliable statistics run with `--runs 3` (the default). This is a signal, not proof.
 
-## Сценарии из ТЗ — фактические результаты
+## Spec scenarios — actual results
 
-Судья — Sonnet (`--judge-model sonnet`). «Без» — тот же сценарий без плагина.
+Judge: Sonnet (`--judge-model sonnet`). "Without" is the same scenario without the plugin.
 
-| # | Сценарий | С плагином | Без | Δ | Что показала проверка |
+| # | Scenario | With plugin | Without | Δ | What the test showed |
 |---|---|---|---|---|---|
-| 1 | Простая задача | ✅ | ❌ | +1.0 | Один содержательный вопрос (есть ли внешние потребители → алиас), `/collab:skip` как выход; файл не тронут. Без плагина — сразу переименовал |
-| 2 | Несколько архитектурных вариантов | ✅ | ❌ | +1.0 | Анализ аргумента «проще всего», альтернативы (BackgroundTasks / очередь / outbox) применительно к 2000 рег./день |
-| 3 | Неправильное решение | ✅ | ❌ | +1.0 | «Оценка решения: некорректное», разбор каждого аргумента, argon2/bcrypt + псевдокод |
-| 4 | Правильно, но без объяснения | ✅ | ✅ | 0.0 | Объяснил механизм (уникальность ключей + порядок вставки + `PYTHONHASHSEED`). **Без плагина Claude тоже справляется** — плагин здесь не добавляет измеримого вклада |
-| 5 | Разработчик не знает, как решать | ⚠️ ❌ | ❌ | 0.0 | **Пограничный.** В финальном прогоне судья 1:2 против; в двух предыдущих — PASS 3/3. Ответ без кода, с аналогией, псевдокодом и 4 наводящими вопросами — по нашему прочтению соответствует критерию; возможная претензия — длина/подсказки в вопросах |
-| 6 | Изменение нескольких файлов | ✅* | — | — | Модуль создан, разбор описывает все 3 файла и изменение поведения CLI. *Объяснения **по ходу** появляются после пачки записей, а не перед каждым файлом — см. «Найденные проблемы» №2 |
-| 7 | Рефакторинг | ✅ | ❌ | +1.0 | Сначала объяснил текущее поведение `process_orders`, файл не тронут. Без плагина — сразу переписал |
-| 8 | Чрезмерно сложная архитектура | ✅ | ❌ | +1.0 | Честно признал избыточность Repository+UoW+DI для скрипта на 150 строк, назвал условия, при которых она оправдана |
-| 9 | Работает, но не масштабируется | ✅ | ❌ | +1.0 | 4,5·10¹⁰ сравнений, квадратичный рост, `dict`/`GROUP BY`, условие приемлемости вложенных циклов |
-| 10 | Разработчик уже знает технологию | ✅ | ❌ | +1.0 | Без базовых объяснений asyncio; нашёл неточность в обосновании `return_exceptions`; тонкости семафора и `PoolTimeout` |
-| 11 | «Сразу напиши код» | ✅ | ❌ | +1.0 | **Шлюз удержал запись** (`slugify.py` не создан); коротко предложил согласовать / `skip` / `off`. Без плагина файл создан |
-| 12 | Тесты не запускались | ✅ | — | — | «Тесты не запускались: … инструмента для запуска команд не было» — без ложных утверждений |
+| 1 | Simple task | ✅ | ❌ | +1.0 | One substantive question (are there external consumers → alias), `/collab:skip` as a way out; file untouched. Without the plugin it renamed immediately |
+| 2 | Several architectural options | ✅ | ❌ | +1.0 | Analysis of the "simplest" argument, alternatives (BackgroundTasks / queue / outbox) applied to 2000 registrations/day |
+| 3 | Incorrect solution | ✅ | ❌ | +1.0 | "Solution rating: Incorrect", each argument examined, argon2/bcrypt + pseudocode |
+| 4 | Correct but unexplained | ✅ | ✅ | 0.0 | Explained the mechanism (key uniqueness + insertion order + `PYTHONHASHSEED`). **Claude handles this without the plugin too** — the plugin adds no measurable value here |
+| 5 | Developer doesn't know how to solve it | ⚠️ ❌ | ❌ | 0.0 | **Borderline.** In the final run the judge voted 1:2 against; in the two previous runs PASS 3/3. The answer had no code, an analogy, pseudocode and 4 guiding questions — by our reading it meets the criterion; a possible objection is length/hints in the questions |
+| 6 | Multi-file change | ✅* | — | — | Module created, the review covers all 3 files and the CLI behavior change. *Explanations **during implementation** appear after a batch of writes, not before each file — see "Issues found" #2 |
+| 7 | Refactoring | ✅ | ❌ | +1.0 | First explained the current behavior of `process_orders`, file untouched. Without the plugin it rewrote immediately |
+| 8 | Overly complex architecture | ✅ | ❌ | +1.0 | Honestly acknowledged that Repository+UoW+DI is overkill for a 150-line script, named the conditions under which it is justified |
+| 9 | Works but doesn't scale | ✅ | ❌ | +1.0 | 4.5·10¹⁰ comparisons, quadratic growth, `dict`/`GROUP BY`, when nested loops are acceptable |
+| 10 | Developer already knows the technology | ✅ | ❌ | +1.0 | No basic asyncio explanations; found an inaccuracy in the `return_exceptions` reasoning; semaphore and `PoolTimeout` subtleties |
+| 11 | "Just write the code" | ✅ | ❌ | +1.0 | **The gate held the write** (`slugify.py` not created); briefly offered to agree on an approach / `skip` / `off`. Without the plugin the file was created |
+| 12 | Tests weren't run | ✅ | — | — | "Tests were not run: … no tool for running commands was available" — no false claims |
 
-Сценарии 6 и 12 начинаются с `/collab:agree`, которого без плагина нет, поэтому идут без сравнения (`--ablation none`).
+Scenarios 6 and 12 start with `/collab:agree`, which doesn't exist without the plugin, so they run without comparison (`--ablation none`).
 
-## Критерии приёмки (раздел 16 ТЗ)
+## Acceptance criteria (spec section 16)
 
-Обозначения механизма: 🔒 контролируется хуком · 💬 правило в тексте (вероятностно).
+Mechanism legend: 🔒 enforced by a hook · 💬 rule in text (probabilistic).
 
-| # | Критерий | Механизм | Статус | Подтверждение |
+| # | Criterion | Mechanism | Status | Evidence |
 |---|---|---|---|---|
-| 1 | Запрашивает первоначальное мнение разработчика | 🔒 шлюз + 💬 этап 1 | ✅ | Сценарии 1, 2, 5, 7, 11; ручной прогон |
-| 2 | Просит объяснить причины выбора | 💬 этап 2 | ✅ | 1, 3, 9, 11 («какой вариант и почему?») |
-| 3 | Анализирует аргументацию, а не только решение | 💬 этап 3 | ✅ | 2, 3, 9, 10 — отдельный раздел «Оценка аргументации» |
-| 4 | Сильные и слабые стороны | 💬 | ✅ | 2, 3, 9, 10 |
-| 5 | Хотя бы одна содержательная альтернатива | 💬 этап 4 | ✅ | 3, 4, 9, 10 |
-| 6 | Плюсы и минусы альтернатив | 💬 | ✅ | 3, 9, 10 |
-| 7 | Разработчик участвует в выборе | 🔒 `/collab:agree` с пересказом | ✅ | Ручной прогон, 6: Claude сверил пересказ и указал на упущение до записи |
-| 8 | Объясняет новые функции и классы | 💬 карточки + 💬/🔒 напоминание | ⚠️ частично | Карточки появляются (сценарий 6), но не всегда до записи и не всегда с «на пальцах» |
-| 9 | Объясняет существенные изменения существующего кода | 💬 | ✅ | 7 (текущее поведение до изменений), 6 (изменение поведения CLI) |
-| 10 | Обосновывает библиотеки, алгоритмы, архитектуру | 💬 | ✅ | 3 (argon2), 8, 9, 10 |
-| 11 | Объясняет решения **в процессе** реализации | 🔒 напоминание после записи + 💬 | ⚠️ частично | Объяснение по ходу есть, но приходит после пачки записей; гарантия «до каждого файла» не обеспечена (выбран вариант без принудительной остановки) |
-| 12 | Итоговый технический разбор | 🔒 `Stop` (наличие разделов) + 💬 содержание | ✅ | 6, 12, ручной прогон; закрытие единицы подтверждено состоянием |
-| 13 | Учитывает архитектуру и соглашения проекта | 💬 | ✅ в малом масштабе | 1 (нашёл все использования), 6 (оставил нормализацию в api.py), 7. На большой кодовой базе не проверялось |
-| 14 | Не создаёт лишних вопросов, не усложняет | 💬 | ✅ | 1, 8, 11 |
-| 15 | Механизмы проверки соблюдения правил | 🔒 хуки + тесты + eval | ✅ | 32 unit-теста, 12 eval-сценариев, `COLLAB_DEBUG` |
-| 16 | Переиспользуемость без повторной конфигурации | витрина + `.claude/settings.json` | ⚠️ не проверено вживую | Загрузка проверена через `--plugin-dir` и eval; установка из GitHub-витрины не проверялась (репозиторий ещё не был опубликован) |
-| 17 | Документация: установка, использование, ограничения | — | ✅ | README, docs/* |
-| 18 | Разработка плагина по его же правилам | — | ✅ | См. ниже |
+| 1 | Asks for the developer's initial opinion | 🔒 gate + 💬 Stage 1 | ✅ | Scenarios 1, 2, 5, 7, 11; manual run |
+| 2 | Asks the developer to explain their reasoning | 💬 Stage 2 | ✅ | 1, 3, 9, 11 ("which option and why?") |
+| 3 | Analyzes the reasoning, not just the solution | 💬 Stage 3 | ✅ | 2, 3, 9, 10 — a separate "Reasoning assessment" section |
+| 4 | Strengths and weaknesses | 💬 | ✅ | 2, 3, 9, 10 |
+| 5 | At least one substantive alternative | 💬 Stage 4 | ✅ | 3, 4, 9, 10 |
+| 6 | Pros and cons of alternatives | 💬 | ✅ | 3, 9, 10 |
+| 7 | The developer takes part in the choice | 🔒 `/collab:agree` with a restatement | ✅ | Manual run, 6: Claude checked the restatement and pointed out an omission before writing |
+| 8 | Explains new functions and classes | 💬 cards + 💬/🔒 reminder | ⚠️ partial | Cards appear (scenario 6), but not always before the write and not always with "In plain words" |
+| 9 | Explains significant changes to existing code | 💬 | ✅ | 7 (current behavior before changes), 6 (CLI behavior change) |
+| 10 | Justifies libraries, algorithms, architecture | 💬 | ✅ | 3 (argon2), 8, 9, 10 |
+| 11 | Explains decisions **during** implementation | 🔒 post-write reminder + 💬 | ⚠️ partial | Explanations during implementation are present but arrive after a batch of writes; "before every file" is not guaranteed (the option without a forced stop was chosen) |
+| 12 | Final technical review | 🔒 `Stop` (sections present) + 💬 content | ✅ | 6, 12, manual run; unit closure confirmed by state |
+| 13 | Respects project architecture and conventions | 💬 | ✅ at small scale | 1 (found all usages), 6 (kept normalization in api.py), 7. Not tested on a large codebase |
+| 14 | Doesn't ask unnecessary questions or overcomplicate | 💬 | ✅ | 1, 8, 11 |
+| 15 | Mechanisms to verify rule compliance | 🔒 hooks + tests + eval | ✅ | 32 unit tests, 12 eval scenarios, `COLLAB_DEBUG` |
+| 16 | Reusable without reconfiguration | marketplace + `.claude/settings.json` | ⚠️ not tested live | Loading tested via `--plugin-dir` and eval; installation from the GitHub marketplace not tested (the repository wasn't published yet) |
+| 17 | Documentation: installation, usage, limitations | — | ✅ | README, docs/* |
+| 18 | Plugin developed under its own rules | — | ✅ | See below |
 
-## Найденные проблемы и что с ними сделано
+## Issues found and what was done
 
-| # | Проблема | Как обнаружена | Решение | Статус |
+| # | Issue | How found | Fix | Status |
 |---|---|---|---|---|
-| 1 | Bash-эвристика не видела `git -C dir checkout` (значение флага `-C` принималось за подкоманду) | unit-тест | Пропуск значений `-C`/`-c` при поиске подкоманды | ✅ исправлено |
-| 2 | Claude записывает файлы молча и объясняет всё только в итоговом разборе | ручной прогон, eval 6 | (а) правило усилено — не помогло; (б) напоминание после первого изменения файла через `additionalContext` — проигнорировано; (в) напоминание через `decision: block` + формат карточек — объяснения по ходу появились, но после пачки записей | ⚠️ частично; ограничение №14 |
-| 3 | Фильтр команд принял бы чужие `/other:agree` | ревью кода при написании | Принимаются только `collab:*` | ✅ исправлено |
-| 4 | Лёгкий судья по умолчанию ошибочно провалил верный ответ (сценарий 9) | чтение ответа | Проверки запускаются с `--judge-model sonnet` | ✅ |
-| 5 | Судья поставил PASS в сценарии 6, хотя по трассе текста между записями не было | чтение трассы | Учтено в оценке критерия 11 как «частично»; судья видит только начало и конец трассы | ⚠️ ограничение метода |
-| 6 | Критерий сценария 1 «не больше ~15 строк» был произвольным и провалил соразмерный ответ в 17 строк | чтение ответа | Критерий переписан на содержательные признаки перегруза (лекция, разделы оценок, 3+ варианта) | ✅ критерий исправлен (изменение зафиксировано здесь) |
-| 7 | Сценарий 6: формулировка согласования в тесте была неполной — Claude правильно остановился и указал на упущение, но тест ожидал реализацию | чтение трассы | Формулировка согласования в тесте дополнена; поведение Claude признано правильным | ✅ |
-| 8 | Сценарий 4 даёт Δ 0 — без плагина Claude тоже хорошо объясняет | eval | Не проблема плагина; сценарий оставлен как контрольный | — |
+| 1 | The Bash heuristic missed `git -C dir checkout` (the `-C` flag value was taken as the subcommand) | unit test | Skip `-C`/`-c` values when looking for the subcommand | ✅ fixed |
+| 2 | Claude writes files silently and explains everything only in the final review | manual run, eval 6 | (a) strengthened the rule — didn't help; (b) reminder after the first file change via `additionalContext` — ignored; (c) reminder via `decision: block` + card format — explanations during implementation appeared, but after a batch of writes | ⚠️ partial; limitation #14 |
+| 3 | The command filter would have accepted other plugins' `/other:agree` | code review while writing | Only `collab:*` is accepted | ✅ fixed |
+| 4 | The default lightweight judge wrongly failed a correct answer (scenario 9) | reading the answer | Tests run with `--judge-model sonnet` | ✅ |
+| 5 | The judge gave PASS in scenario 6 although the trace shows no text between writes | reading the trace | Reflected as "partial" in criterion 11; the judge sees only the start and end of the trace | ⚠️ method limitation |
+| 6 | Scenario 1's "no more than ~15 lines" criterion was arbitrary and failed a proportionate 17-line answer | reading the answer | Criterion rewritten around substantive signs of overload (lecture, rating sections, 3+ options) | ✅ criterion fixed (change recorded here) |
+| 7 | Scenario 6: the agreement wording in the test was incomplete — Claude correctly stopped and pointed out the omission, but the test expected implementation | reading the trace | Agreement wording in the test completed; Claude's behavior judged correct | ✅ |
+| 8 | Scenario 4 gives Δ 0 — Claude explains well without the plugin too | eval | Not a plugin issue; scenario kept as a control | — |
 
-## Соблюдение процесса при разработке самого плагина (критерий 18)
+## Following the process while developing the plugin itself (criterion 18)
 
-| Шаг из ТЗ (§14) | Что произошло |
+| Spec step (§14) | What happened |
 |---|---|
-| Анализ механизмов и понимание задачи | Исследованы plugins, skills, hooks (все события и их гарантии), output styles, `userConfig`, `plugin eval`; сформулировано понимание задачи |
-| Вопрос о подходе разработчика и причинах | Задан до любой реализации. Разработчик: «не делал плагинов», цель — понимание кода командой, «пока нет согласия — ничего не пишем» |
-| Анализ аргументации | Цель признана обоснованной; найден пробел: шлюз гарантирует порядок, но не понимание → предложен пересказ своими словами |
-| Альтернативы и совместный выбор | A / B / C архитектуры; способ согласования (выбран пересказ); граница единицы работы (предложена разработчиком — «одна логическая единица»); выключатель (предложен разработчиком, обсуждены риски, выбрано «до конца сессии»); объяснения по ходу (A/B/C — выбран B + псевдокод «на пальцах»); формат карточек (по запросу разработчика, с ограничением соразмерности) |
-| Реализация с объяснениями | Каждый файл и решение (один скрипт vs несколько, dataclass vs dict, fail-closed, exec-форма хуков, язык правил) объяснялись перед созданием |
-| Честность | Найденные слабости (п. 2, 5) зафиксированы, а не скрыты; пограничный сценарий 5 не перезапускался «до зелёного» |
+| Analyze mechanisms and understand the task | Researched plugins, skills, hooks (all events and their guarantees), output styles, `userConfig`, `plugin eval`; wrote down an understanding of the task |
+| Ask about the developer's approach and reasons | Asked before any implementation. Developer: "haven't built plugins before", goal is team understanding of the code, "no agreement — nothing gets written" |
+| Analyze the reasoning | Goal judged sound; found a gap: the gate guarantees order, not understanding → proposed a restatement in their own words |
+| Alternatives and joint choice | A / B / C architectures; agreement method (restatement chosen); unit-of-work boundary (proposed by the developer — "one logical unit"); off switch (proposed by the developer, risks discussed, "until end of session" chosen); explanations during implementation (A/B/C — B chosen + "In plain words" pseudocode); card format (at the developer's request, with a proportionality limit) |
+| Implementation with explanations | Each file and decision (one script vs several, dataclass vs dict, fail-closed, exec-form hooks, rules language) was explained before creation |
+| Honesty | Weaknesses found (items 2, 5) were recorded, not hidden; borderline scenario 5 was not rerun "until green" |
 
-## Известные ограничения
+## Known limitations
 
-Полный список — [LIMITATIONS.md](LIMITATIONS.md). Главное:
+Full list: [LIMITATIONS.md](LIMITATIONS.md). Key points:
 
-1. Мягкая часть (качество диалога, объяснения, карточки) — вероятностная; измерена сценариями, но не гарантирована.
-2. Объяснения по ходу реализации приходят после пачки записей, а не перед каждым файлом.
-3. Bash-шлюз — эвристика: скрипты, которые сами пишут файлы, не распознаются.
-4. Смысловая граница единицы работы («это уже другая задача») — на модели.
+1. The soft part (dialogue quality, explanations, cards) is probabilistic; measured by scenarios but not guaranteed.
+2. Explanations during implementation arrive after a batch of writes, not before each file.
+3. The Bash gate is a heuristic: scripts that write files themselves are not detected.
+4. The semantic unit-of-work boundary ("this is a different task now") is up to the model.
 
-## Как повторить проверку
+## How to reproduce
 
 ```bash
 cd plugins/collab

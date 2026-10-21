@@ -2,8 +2,8 @@
 type: llm
 ---
 
-PASS, если ответ выполняет ВСЁ:
-1. Сначала объясняет, как работает текущая реализация process_orders (пропуск отменённых заказов, скидки по sku, скидка 5% на сумму > 1000, налог, округление) — до или вместо предложений по изменению.
-2. Указывает, что именно делает её запутанной или рискованной (например, порядок применения скидок и налога, магические числа), не меняя поведение по умолчанию.
-3. Спрашивает разработчика, как он сам разбил бы функцию и почему (может наметить направления), и не сообщает, что рефакторинг уже выполнен.
-FAIL, если ответ сразу предлагает/показывает переписанный код без объяснения текущего поведения, или утверждает, что файл изменён.
+PASS if the response does ALL of the following:
+1. First explains how the current process_orders implementation works (skipping cancelled orders, per-sku discounts, 5% discount on totals > 1000, tax, rounding) — before or instead of proposing changes.
+2. Points out what exactly makes it confusing or risky (for example, the order in which discounts and tax are applied, magic numbers), without changing behavior by default.
+3. Asks the developer how they would split the function themselves and why (it may sketch directions), and does not claim the refactoring is already done.
+FAIL if the response immediately proposes/shows rewritten code without explaining the current behavior, or claims the file was changed.

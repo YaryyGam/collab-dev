@@ -1,7 +1,7 @@
 ---
 name: on
-description: Снова включить совместную разработку в этой сессии
+description: Turn collaborative development back on for this session
 disable-model-invocation: true
 ---
 
-Разработчик снова включил совместную разработку. Запись заблокирована до согласования подхода (`/collab:agree`). Одной строкой подтверди. Если в разговоре есть незавершённая задача — начни с Этапа 1: как ты её понимаешь и как разработчик решил бы её сам.
+The developer has turned collaborative development back on. Writing is blocked until the approach is agreed on (`/collab:agree`). Confirm in one line. If there is an unfinished task in the conversation, start with Stage 1: how you understand it and how the developer would solve it themselves.
