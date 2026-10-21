@@ -33,6 +33,12 @@ GATE_MESSAGE = (
     "/collab:agree <the approach in their own words>, or /collab:skip <reason>, or /collab:off "
     "<reason> themselves. Do not try to get around the block some other way."
 )
+EDIT_ONLY_MESSAGE = (
+    "collab: change the contents of project files only with Edit or Write, so the developer sees every "
+    "code change as a diff; this command was not run. Make the same change with Edit (Write for a new file). "
+    "Everything else stays in the shell: git, package managers, tests, rm/mv. A scratch file outside the "
+    "project can be written with Write or redirected into /tmp."
+)
 SELF_PROTECT_MESSAGE = (
     "collab: only the developer may change the plugin's state files, through the /collab:* "
     "commands. Do not modify them."
@@ -60,6 +66,7 @@ class SessionState:
     stage: str = "discussing"
     agreement: str = ""
     changed_files: list = field(default_factory=list)
+    change_anchors: dict = field(default_factory=dict)  # file → id of the tool call that first changed it
     bash_writes: int = 0
     units_closed: int = 0
 
@@ -71,6 +78,7 @@ class SessionState:
         self.stage = stage
         self.agreement = agreement
         self.changed_files = []
+        self.change_anchors = {}
         self.bash_writes = 0
 
     def close_unit(self) -> None:
@@ -217,6 +225,20 @@ def bash_write_reason(command: str, config: dict) -> str | None:
     return None
 
 
+def _has_write_flag(args: list, flags: list | None) -> bool:
+    """`sed -i`, `sed -ni`, `perl -pi`: a flag that makes the program edit files in place."""
+    return bool(flags) and any(a in flags or ("-i" in flags and re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a)) for a in args)
+
+
+def _is_interpreter(name: str, interpreters: list) -> bool:
+    return name in interpreters or bool(re.match(r"python3(\.\d+)?$", name)) or name == "py"
+
+
+def _writes_inline(raw_command: str, markers: list) -> bool:
+    # the code itself sits in quotes/heredoc, so search the raw command
+    return any(re.search(marker, raw_command) for marker in markers)
+
+
 def _segment_write_reason(words: list, raw_command: str, cfg: dict) -> str | None:
     """Check one simple command (program + args) against the bash config lists."""
     if not words:
@@ -225,19 +247,15 @@ def _segment_write_reason(words: list, raw_command: str, cfg: dict) -> str | Non
     args = words[1:]
     if name in cfg["write_commands"]:
         return f"command {name}"
-    flags = cfg["flag_writes"].get(name)
-    if flags and any(a in flags or ("-i" in flags and re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a)) for a in args):
+    if _has_write_flag(args, cfg["flag_writes"].get(name)):
         return f"{name} modifying files"
     subs = cfg["subcommand_writes"].get(name)
     if subs:
         sub = _subcommand(args)
         if sub in subs:
             return f"{name} {sub}"
-    if name in cfg["interpreters"] or re.match(r"python3(\.\d+)?$", name) or name == "py":
-        # the code itself sits in quotes/heredoc, so search the raw command
-        for marker in cfg["inline_write_markers"]:
-            if re.search(marker, raw_command):
-                return f"{name} code that looks like it writes a file"
+    if _is_interpreter(name, cfg["interpreters"]) and _writes_inline(raw_command, cfg["inline_write_markers"]):
+        return f"{name} code that looks like it writes a file"
     return None
 
 
@@ -282,6 +300,54 @@ def shell_write_reason(tool: str, command: str, config: dict) -> str | None:
     if tool == "PowerShell":
         return powershell_write_reason(command, config)
     return bash_write_reason(command, config)
+
+
+def _inside_project(target: str, cwd: Path, env: Env) -> bool:
+    """Whether a shell write target is a project file. `$VAR/...` and quoted targets (`Q`) are unknown: no."""
+    if not target or target == "Q" or target.startswith(("$", "/dev/")):
+        return False
+    path = Path(_native_path(target)).expanduser()
+    return _is_inside(str(path if path.is_absolute() else cwd / path), env.project_dir)
+
+
+def _write_target(args: list) -> str:
+    """The file a tee-like command writes: the value of -Path/-FilePath/-LiteralPath, else its first positional argument."""
+    for i, arg in enumerate(args[:-1]):
+        if arg.lower() in ("-path", "-filepath", "-literalpath"):
+            return args[i + 1]
+    return next((a for a in args if not a.startswith("-")), "")
+
+
+def shell_content_write_reason(tool: str, command: str, cwd: Path, env: Env) -> str | None:
+    """Whether a shell command changes the contents of a project file, which must go through Edit/Write
+    so the developer sees the diff. Other writes (rm, mv, git, package managers) are not reported."""
+    cfg = env.config["edit_only"]
+    if tool == "PowerShell":
+        stripped = _QUOTED.sub(" Q ", _PS_HERESTRING.sub(" Q ", command))
+        redirect, separator = _PS_REDIRECT, _PS_SEPARATOR
+        if any(re.search(marker, command, re.I) for marker in cfg["powershell_write_markers"]):
+            return "file write through .NET"
+    else:
+        stripped = _strip_literals(command)
+        redirect, separator = _REDIRECT, _SEPARATOR
+
+    for target in redirect.findall(stripped):
+        if _inside_project(target, cwd, env):
+            return f"output redirected into {target}"
+    for segment in separator.split(stripped):
+        words = _command_words(segment, env.config["bash"]["wrappers"])
+        while words and words[0] in ("&", "."):  # PowerShell call operators
+            words = words[1:]
+        if not words:
+            continue
+        name, args = _program_name(words[0]), words[1:]
+        if name in cfg["target_commands"] and _inside_project(_write_target(args), cwd, env):
+            return f"{name} into {_write_target(args)}"
+        if _has_write_flag(args, cfg["flag_writes"].get(name)):
+            return f"{name} editing files in place"
+        if _is_interpreter(name, env.config["bash"]["interpreters"]) and _writes_inline(command, cfg["inline_write_markers"]):
+            return f"{name} code that writes a file"
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -430,6 +496,10 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if tool in SHELL_TOOLS and _mentions_path(tool_input.get("command") or "", env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
 
+    if state.stage in OPEN_STAGES and tool in SHELL_TOOLS:
+        cwd = Path(event.get("cwd") or env.project_dir)
+        reason = shell_content_write_reason(tool, tool_input.get("command") or "", cwd, env)
+        return _deny(f"{EDIT_ONLY_MESSAGE} (detected: {reason})") if reason else None
     if state.stage != "discussing":
         return None
     if tool in write_tools:
@@ -444,13 +514,17 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     return None
 
 
-def _explain_reminder(path: str, env: Env) -> str:
+def _shown(path: str, env: Env) -> str:
+    """A path as the developer reads it: relative to the project when it is inside."""
     try:
-        shown = str(Path(path).resolve().relative_to(env.project_dir.resolve()))
+        return str(Path(path).resolve().relative_to(env.project_dir.resolve()))
     except ValueError:
-        shown = path
+        return path
+
+
+def _explain_reminder(path: str, env: Env) -> str:
     return (
-        f"collab: file {shown} changed. Before calling the next tool, write the developer an "
+        f"collab: file {_shown(path, env)} changed. Before calling the next tool, write the developer an "
         "explanation of this change (if you have not yet): what changed in the file and why, and for each "
         "new or changed function, a card following the \"Code explanation format\" "
         "(parameters, result, the functions used and why them, \"in plain words\": 3–8 lines of pseudocode "
@@ -469,6 +543,7 @@ def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | N
         path = _tool_path(tool_input)
         if path and _is_inside(path, env.project_dir) and path not in state.changed_files:
             state.changed_files.append(path)
+            state.change_anchors[path] = event.get("tool_use_id") or ""
             if state.mode in env.config.get("explain_after_write_modes", MODES):
                 # "block" does not undo the write (it already happened): it attaches the reason to
                 # the tool result as hook feedback, which the model treats as something to act on.
@@ -483,6 +558,88 @@ def _ends_with_question(message: str) -> bool:
     return bool(paragraphs) and "?" in paragraphs[-1]
 
 
+def _names_file(text: str, path: str) -> bool:
+    return bool(re.search(rf"(?<![\w.]){re.escape(Path(path).name)}(?!\w)", text))
+
+
+def _transcript_events(path: str) -> list | None:
+    """Claude's texts and tool calls in the session transcript, in order: ("text", text) / ("tool", id).
+    None when the transcript can't be read."""
+    events = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if '"assistant"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                content = (record.get("message") or {}).get("content")
+                if record.get("type") != "assistant" or not isinstance(content, list):
+                    continue
+                for block in content:
+                    if block.get("type") == "text":
+                        events.append(("text", block.get("text") or ""))
+                    elif block.get("type") == "tool_use":
+                        events.append(("tool", block.get("id") or ""))
+    except (OSError, TypeError):
+        return None
+    return events
+
+
+def _explained_along_the_way(events: list, anchors: dict, final_message: str, env: Env) -> set:
+    """Changed files that a text of Claude's explains: at least explain_min_chars long, naming the file,
+    written after the tool call before the file's first change, and not part of the final review."""
+    min_chars = env.config.get("explain_min_chars", 200)
+    tool_at = {value: i for i, (kind, value) in enumerate(events) if kind == "tool"}
+    explained = set()
+    for path, anchor in anchors.items():
+        if anchor not in tool_at:
+            continue
+        # start after the previous call, so "now I'll change X in api.py" right before the edit counts
+        start = max((j for j in range(tool_at[anchor]) if events[j][0] == "tool"), default=-1)
+        if any(kind == "text" and len(text) >= min_chars and _names_file(text, path)
+               and text.strip() not in final_message
+               and not re.search(env.config["review_heading_pattern"], text, re.M)
+               for kind, text in events[start + 1:]):
+            explained.add(path)
+    return explained
+
+
+def _files_missing_from_section(message: str, files: list, env: Env) -> list:
+    """Files without their own "#### <file>" heading under the "Explanation by file" section."""
+    m = re.search(env.config["explain_section_pattern"], message, re.M)
+    headings = re.findall(r"^#{3,6}\s.*$", message[m.end():], re.M) if m else []
+    return [f for f in files if not any(_names_file(h, f) for h in headings)]
+
+
+def _review_problems(event: dict, state: SessionState, env: Env, message: str) -> list:
+    problems = []
+    if not re.search(env.config["verification_heading_pattern"], message, re.M):
+        problems.append(
+            "collab: the final review has no \"### Verification\" section. Add it: which tests and "
+            "checks were actually run and with what result, what remains unverified. "
+            "If tests were not run, say so."
+        )
+    missing = _files_missing_from_section(message, state.changed_files, env)
+    if missing:  # read the transcript only when the review itself doesn't cover every file
+        events = _transcript_events(event.get("transcript_path") or "") or []
+        explained = _explained_along_the_way(events, state.change_anchors, message, env)
+        missing = [p for p in missing if p not in explained]
+    if missing:
+        problems.append(
+            f"collab: these changed files were not explained along the way: {', '.join(_shown(p, env) for p in missing)}. "
+            "Your replies to the developer have no explanation of them: your thinking is not shown, and code "
+            "inside Write/Edit calls does not count. So don't say they were explained earlier; just explain them now. "
+            "Add a \"### Explanation by file\" section to the final review with a \"#### <file>\" heading for "
+            "each of them: what changed in it and why, and for each new or changed function a card following "
+            "the \"Code explanation format\" (\"In plain words\" pseudocode for non-trivial logic). "
+            "A mechanical edit (import, rename) needs one sentence."
+        )
+    return problems
+
+
 def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     if state.stage not in OPEN_STAGES:
         return None
@@ -490,13 +647,9 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     retrying = bool(event.get("stop_hook_active"))
 
     if re.search(env.config["review_heading_pattern"], message, re.M):
-        if not retrying and not re.search(env.config["verification_heading_pattern"], message, re.M):
-            return _block(
-                "collab: the final review has no \"### Verification\" section. Add it: which tests and "
-                "checks were actually run and with what result, what remains unverified. "
-                "If tests were not run, say so.",
-                "Stop",
-            )
+        problems = [] if retrying else _review_problems(event, state, env, message)
+        if problems:
+            return _block("\n\n".join(problems), "Stop")
         state.close_unit()
         return {"systemMessage": "collab: unit of work closed. The next task will start with a discussion of the approach."}
 

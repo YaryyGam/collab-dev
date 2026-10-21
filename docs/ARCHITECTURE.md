@@ -82,9 +82,10 @@ One module, invoked with the event name. Handlers are pure functions `decide_*(e
 | `decide_session_start` | New state for `startup/clear`, kept for `resume/compact`; mode context |
 | `decide_user_prompt` | Status line (except for `/collab:*`, whose status comes from `decide_command`) |
 | `decide_command` | Parsing `/collab:*`: argument validation, stage change, journal entries |
-| `decide_pre_tool_use` | State protection + write gate |
-| `decide_post_tool_use` | Change tracking in the open unit; on the first change to a file — a reminder to explain it "In plain words" (modes: `explain_after_write_modes` in `gate.json`) |
-| `decide_stop` | Requiring the final review, closing the unit |
+| `shell_content_write_reason()` | Narrower than `bash_write_reason`: does a shell command write the *contents* of a project file (redirect or `tee` into the project, `sed -i`/`perl -i`, inline interpreter writes, PowerShell `Set-Content`/`Out-File`/.NET). Lists: `edit_only` in `gate.json` |
+| `decide_pre_tool_use` | State protection + write gate; in an open unit, rejects shell writes of file contents so code changes go through Edit/Write |
+| `decide_post_tool_use` | Change tracking in the open unit (with the id of each file's first change, `change_anchors`); on the first change to a file — a reminder to explain it "In plain words" (modes: `explain_after_write_modes` in `gate.json`) |
+| `decide_stop` | Requiring the final review with "Verification" and an "Explanation by file" heading for every changed file not explained along the way (read from the session transcript), closing the unit |
 
 **Why Python and the standard library:** readable code for the team, built-in `json`/`re`/`unittest`, no dependencies or installation. The `bash + jq` alternative is shorter but harder to read and test, and `jq` isn't available everywhere.
 

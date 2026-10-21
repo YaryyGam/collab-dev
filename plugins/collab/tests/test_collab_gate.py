@@ -195,10 +195,14 @@ class Commands(GateTestCase):
 
 
 class StopCheck(GateTestCase):
-    REVIEW = "## Final review\n### 1. What was implemented\nPagination.\n### 7. Verification\nTests were not run."
+    REVIEW = ("## Final review\n### 1. What was implemented\nPagination.\n### 3. Explanation by file\n"
+              "#### `a.py`\nAdded paginate().\n### 7. Verification\nTests were not run.")
 
-    def stop(self, state, message, active=False):
-        return g.decide_stop({"last_assistant_message": message, "stop_hook_active": active}, state, self.env)
+    def stop(self, state, message, active=False, transcript=None):
+        event = {"last_assistant_message": message, "stop_hook_active": active}
+        if transcript is not None:
+            event["transcript_path"] = str(transcript)
+        return g.decide_stop(event, state, self.env)
 
     def test_no_check_outside_open_unit(self):
         self.assertIsNone(self.stop(g.SessionState(), "done"))
@@ -233,11 +237,141 @@ class StopCheck(GateTestCase):
         self.assertEqual((state.stage, state.units_closed), ("discussing", 1))
 
     def test_russian_and_ukrainian_headings(self):
-        for review in ("## Итоговый разбор\n### Проверка\n-", "## Підсумковий розбір\n### Перевірка\n-"):
+        for review in ("## Итоговый разбор\n### Объяснение по файлам\n#### a.py\n-\n### Проверка\n-",
+                       "## Підсумковий розбір\n### Пояснення по файлах\n#### a.py\n-\n### Перевірка\n-"):
             with self.subTest(review=review):
                 state = g.SessionState(stage="agreed", changed_files=["a.py"])
                 self.stop(state, review)
                 self.assertEqual(state.stage, "discussing")
+
+
+class ExplanationByFile(GateTestCase):
+    """Stop: every changed file is explained along the way or under "Explanation by file" in the review."""
+
+    REVIEW = "## Final review\nDone.\n### Verification\nTests were not run."
+    EXPLAIN_A = "In a.py I moved the email check into is_valid(): it returns a bool instead of raising. " * 3
+
+    def setUp(self):
+        super().setUp()
+        self.a, self.b = str(self.project / "a.py"), str(self.project / "pkg" / "b.py")
+        self.transcript = Path(self._tmp.name) / "transcript.jsonl"
+        self.state = g.SessionState(stage="agreed", changed_files=[self.a, self.b],
+                                    change_anchors={self.a: "edit_a", self.b: "edit_b"})
+
+    def write_transcript(self, *responses):
+        """Each response is a list of blocks: a string is text, ("tool", id) is a tool call."""
+        with open(self.transcript, "w", encoding="utf-8") as f:
+            for blocks in responses:
+                content = [{"type": "tool_use", "id": b[1], "name": "Edit", "input": {}} if isinstance(b, tuple)
+                           else {"type": "text", "text": b} for b in blocks]
+                f.write(json.dumps({"type": "assistant", "message": {"content": content}}) + "\n")
+
+    def stop(self, message, active=False):
+        event = {"last_assistant_message": message, "stop_hook_active": active,
+                 "transcript_path": str(self.transcript)}
+        return g.decide_stop(event, self.state, self.env)
+
+    def test_files_explained_along_the_way_need_no_section(self):
+        self.write_transcript([("tool", "read")], [("tool", "edit_a")], [self.EXPLAIN_A, ("tool", "edit_b")],
+                              ["Now b.py: " + "x" * 200, ("tool", "pytest")], [self.REVIEW])
+        self.assertNotIn("decision", self.stop(self.REVIEW))
+        self.assertEqual(self.state.stage, "discussing")
+
+    def test_unexplained_files_are_listed(self):
+        self.write_transcript([("tool", "edit_a")], [self.EXPLAIN_A, ("tool", "edit_b")], [("tool", "pytest")])
+        out = self.stop(self.REVIEW)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("pkg/b.py", out["reason"])
+        self.assertNotIn("a.py,", out["reason"])
+        self.assertIn("#### <file>", out["reason"])
+        self.assertEqual(self.state.stage, "agreed")
+
+    def test_explanation_right_before_the_change_counts(self):
+        self.write_transcript([("tool", "read")], [self.EXPLAIN_A, ("tool", "edit_a")],
+                              ["About b.py: " + "x" * 200, ("tool", "edit_b")])
+        self.assertNotIn("decision", self.stop(self.REVIEW))
+
+    def test_short_or_earlier_mentions_do_not_count(self):
+        self.write_transcript([self.EXPLAIN_A, ("tool", "read")], [("tool", "edit_a")],
+                              ["Updated b.py.", ("tool", "edit_b")])
+        out = self.stop(self.REVIEW)
+        self.assertIn("a.py, pkg/b.py", out["reason"])
+
+    def test_final_review_does_not_count_as_explanation(self):
+        review = self.REVIEW.replace("Done.", "Files: a.py and pkg/b.py were changed. " + "x" * 200)
+        self.write_transcript([("tool", "edit_a"), ("tool", "edit_b")], [review])
+        self.assertEqual(self.stop(review)["decision"], "block")
+
+    def test_section_with_a_heading_per_file_closes_unit(self):
+        review = self.REVIEW.replace("Done.", "### Explanation by file\n#### a.py\nx\n#### `pkg/b.py` (new)\ny")
+        self.assertNotIn("decision", self.stop(review))  # no transcript needed
+        self.assertEqual(self.state.stage, "discussing")
+
+    def test_unreadable_transcript_requires_every_file(self):
+        out = self.stop(self.REVIEW)  # transcript file was never written
+        self.assertIn("a.py, pkg/b.py", out["reason"])
+
+    def test_one_block_carries_every_problem_and_retry_closes(self):
+        out = self.stop("## Final review\nDone.")
+        self.assertIn("Verification", out["reason"])
+        self.assertIn("pkg/b.py", out["reason"])
+        self.assertNotIn("decision", self.stop("## Final review\nDone.", active=True))
+        self.assertEqual(self.state.stage, "discussing")
+
+
+class EditOnlyInOpenUnit(GateTestCase):
+    """In an open unit, file contents in the project change only through Edit/Write; other shell writes run."""
+
+    CONTENT_WRITES = [
+        ("Bash", "cat > a.py <<'EOF'\nprint(1)\nEOF"),
+        ("Bash", "echo x >> src/app.py"),
+        ("Bash", "printf x > ./pkg/b.py && ls"),
+        ("Bash", "sed -i '' 's/a/b/' a.py"),
+        ("Bash", "perl -pi -e 's/a/b/' a.py"),
+        ("Bash", "echo x | tee a.py"),
+        ("Bash", "python3 -c \"open('a.py', 'w').write('x')\""),
+        ("PowerShell", "Set-Content -Path a.py -Value x"),
+        ("PowerShell", "'x' | Out-File a.py"),
+        ("PowerShell", "[IO.File]::WriteAllText('a.py', 'x')"),
+    ]
+    ALLOWED = [
+        ("Bash", "rm a.py && mv b.py c.py && mkdir -p d"),
+        ("Bash", "git add -A && git commit -m 'x'"),
+        ("Bash", "npm install lodash"),
+        ("Bash", "pytest -q > /dev/null 2>&1"),
+        ("Bash", "git show HEAD:a.py > /tmp/old_a.py"),
+        ("Bash", "T=$(mktemp -d) && git show HEAD:a.py > $T/old.py"),
+        ("Bash", "echo x | tee /tmp/log.txt"),
+        ("Bash", "cat a.py | grep 'a > b'"),
+        ("Bash", "python3 -m pytest tests"),
+        ("PowerShell", "Get-Content a.py"),
+        ("PowerShell", "Set-Content -Path /tmp/x.txt -Value a"),
+        ("PowerShell", "Remove-Item a.py"),
+    ]
+
+    def pre(self, state, tool, command):
+        event = {"tool_name": tool, "tool_input": {"command": command}, "cwd": str(self.project)}
+        return g.decide_pre_tool_use(event, state, self.env)
+
+    def test_content_writes_are_denied_with_a_pointer_to_edit(self):
+        for stage in ("agreed", "skipped"):
+            for tool, cmd in self.CONTENT_WRITES:
+                with self.subTest(stage=stage, cmd=cmd):
+                    out = self.pre(g.SessionState(stage=stage), tool, cmd)
+                    self.assertEqual(self.decision(out), "deny")
+                    self.assertIn("Edit", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_other_shell_commands_run(self):
+        for tool, cmd in self.ALLOWED:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.pre(g.SessionState(stage="agreed"), tool, cmd))
+
+    def test_absolute_path_into_the_project_is_caught(self):
+        out = self.pre(g.SessionState(stage="agreed"), "Bash", f"echo x > {self.project}/a.py")
+        self.assertEqual(self.decision(out), "deny")
+
+    def test_off_stage_is_not_checked(self):
+        self.assertIsNone(self.pre(g.SessionState(stage="off"), "Bash", "echo x > a.py"))
 
 
 class PostToolUseTracking(GateTestCase):
@@ -272,6 +406,16 @@ class PostToolUseTracking(GateTestCase):
         self.post(state, "Bash", command="git diff")
         self.post(state, "Bash", command="rm old.py")
         self.assertEqual((len(state.changed_files), state.bash_writes), (1, 1))
+
+    def test_first_change_of_each_file_is_anchored(self):
+        state = g.SessionState(stage="agreed")
+        path = str(self.project / "a.py")
+        for call_id in ("t1", "t2"):
+            g.decide_post_tool_use({"tool_name": "Edit", "tool_input": {"file_path": path}, "tool_use_id": call_id},
+                                   state, self.env)
+        self.assertEqual(state.change_anchors, {path: "t1"})
+        state.close_unit()
+        self.assertEqual(state.change_anchors, {})
 
 
 class SessionLifecycle(GateTestCase):

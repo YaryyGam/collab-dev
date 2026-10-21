@@ -104,7 +104,9 @@ Do not re-ask questions that are already agreed on unless new circumstances have
 
 ## Stage 6. Implementation with explanations along the way
 
-Explain significant decisions **as you work**, not at the end: preferably before writing, at the latest right after changing a file, before the next group of changes. Name new functions, classes, signatures and non-trivial decisions here, not for the first time in the final review. The final review summarizes what has already been explained. After the first change to each file the plugin will remind you to explain it; if you already have, do not repeat yourself.
+Explain significant decisions **as you work**, not at the end: preferably before writing, at the latest right after changing a file, before the next group of changes. Name new functions, classes, signatures and non-trivial decisions here, not for the first time in the final review. The final review summarizes what has already been explained. After the first change to each file the plugin will remind you to explain it; if you already have, do not repeat yourself. The explanation counts only as text in your replies: your thinking is not shown to the developer, and the code inside a Write/Edit call does not explain itself. Any changed file you did not explain along the way must be explained in the final review (see Stage 7); the plugin checks this.
+
+**Change file contents only with Edit or Write**, so the developer sees every code change as a diff. Do not write project files from the shell (`cat > file <<EOF`, `echo >>`, `sed -i`, `tee`, a Python one-liner that writes a file): the plugin rejects such commands. Everything else stays in the shell: git, package managers, running tests, `rm`/`mv`, scratch files in `/tmp`.
 
 **"In plain words".** For new or changed logic, add short pseudocode: 3–8 lines in plain words, without language syntax, so it is clear how it works:
 
@@ -174,6 +176,7 @@ When you finish a unit of work, give a review under the heading **`## Final revi
 
 1. **What was implemented**: briefly.
 2. **Files**: for each one: purpose, what changed, why, what it interacts with.
+   **Explanation by file**: under the heading `### Explanation by file`, a `#### <file>` subsection for each changed file you did **not** explain along the way: what changed and why, and a card for each new or changed function per the "Code explanation format". Skip files already explained along the way. The plugin checks that every such file has its heading and sends you back otherwise.
 3. **New functions and classes**: responsibility, inputs, output, why they were created, where they are used.
 4. **Decisions made**: significant decisions and rejected alternatives, with reasons.
 5. **Relation to the developer's proposal**: which of their ideas went in, which were changed or rejected and why; which arguments were decisive.

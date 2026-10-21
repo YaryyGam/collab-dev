@@ -38,6 +38,12 @@ After the first change to each file, Claude gets a reminder to explain it and gi
 ```
 An empty list `[]` turns the reminder off (the rule in the output style remains). The reminder text is the `_explain_reminder` function in `scripts/collab_gate.py`; what "In plain words" looks like is described in the "Stage 6" section of `output-styles/collab.md`.
 
+### Configure "explanation by file" and "contents only through Edit"
+
+- `explain_min_chars` (200): how long a text naming a file must be to count as its explanation along the way.
+- `explain_section_pattern`: the review section where unexplained files get their `#### <file>` heading.
+- `edit_only`: which shell constructs count as writing file contents in an open unit — `target_commands` (tee-like commands whose first argument is the file), `flag_writes` (in-place flags), `inline_write_markers` and `powershell_write_markers`. Redirections into the project are always checked. Tests: `EditOnlyInOpenUnit` in `tests/test_collab_gate.py`.
+
 ### Add a command that should count as a write
 
 For example, `alembic upgrade` changes the DB schema — block it until agreement:

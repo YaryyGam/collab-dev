@@ -13,6 +13,42 @@
   ],
   "review_heading_pattern": "^#{1,3}\\s*(Итоговый разбор|Підсумковий розбір|Final review)\\b",
   "verification_heading_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Проверка|Перевірка|Verification)\\b",
+  "explain_section_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Объяснение по файлам|Пояснення по файлах|Explanation by file)\\b",
+  "explain_min_chars": 200,
+  "edit_only": {
+    "target_commands": [
+      "tee",
+      "set-content",
+      "add-content",
+      "out-file",
+      "tee-object",
+      "sc",
+      "ac"
+    ],
+    "flag_writes": {
+      "sed": [
+        "-i",
+        "--in-place"
+      ],
+      "perl": [
+        "-i",
+        "-pi"
+      ]
+    },
+    "inline_write_markers": [
+      "\\.write\\(",
+      "write_text\\(",
+      "write_bytes\\(",
+      "writeFile",
+      "appendFile",
+      "open\\([^)]*['\"][wax]\\+?['\"]",
+      "File\\.write"
+    ],
+    "powershell_write_markers": [
+      "\\[(System\\.)?IO\\.File\\]::(Write|Append)",
+      "StreamWriter"
+    ]
+  },
   "bash": {
     "safe_redirect_targets": [
       "/dev/null",

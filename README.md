@@ -189,8 +189,10 @@ session │writes BLOCKED│  /collab:skip <reason>      │skipped │ │
 ```
 
 - While the stage is `discussing`, the hook **blocks** writes to project files (`Write`, `Edit`, `NotebookEdit`) and write-like Bash commands (`>`, `rm`, `sed -i`, `git commit`, `npm install`…). Reading, searching and running tests are always allowed. Writing outside the project (notes, scratchpad) is allowed.
+- After agreement, Claude changes file contents **only with `Edit`/`Write`**, so every code change shows up as a diff you can read. Shell commands that write file contents in the project (`cat > file`, `echo >>`, `sed -i`, `tee`, a script one-liner that writes a file) are rejected; git, package managers, tests and `rm`/`mv` still run in the shell.
 - After the **first** change to each file within a unit of work, Claude gets a reminder: explain what changed and why, and show how it works "in plain words" with short pseudocode. For mechanical edits one sentence is enough.
 - If in the `agreed` stage Claude finishes **with changes but without a final review** and without a question for you, the hook sends it back to write the review. A review with a "Verification" section closes the unit, and the next task starts with a discussion again.
+- Every changed file must be explained: along the way, or in the review under `### Explanation by file` with a `#### <file>` heading per file. Files Claude skipped during the work are listed back to it before the unit can close.
 - If the task drifts away from what was agreed, the rules require Claude to propose closing the unit and agreeing on a new one (this is model behavior, see below).
 
 ---
@@ -205,7 +207,9 @@ The plugin combines two kinds of mechanisms, and it is important to be honest ab
 | Same for writes via Bash | `PreToolUse` hook + heuristic command parsing | 🔐 **Hard, but heuristic**: common ways of writing are caught; elaborate ones (`python script.py` that writes files) are not |
 | Only a human can give agreement | `UserPromptExpansion` hook (fires only on a command typed by a human), `disable-model-invocation`, a ban on writing to state files | 🔒 **Hard** (within the limits of the Bash heuristic) |
 | Agreement is a restatement, not "ok" | At least 6 words in `/collab:agree` | 🔒 Length is hard; Claude checks the **meaning**, which is soft |
-| An explanation of each changed file during the work, with "in plain words" pseudocode | A `PostToolUse` hook adds a reminder for Claude after the first change to each file | 🔐 The reminder always arrives; **the explanation itself** is soft. The explanation comes right **after** the write, not before it (a deliberate choice, see ARCHITECTURE §4) |
+| Code changes are visible as diffs | `PreToolUse` hook rejects shell commands that write file contents in the project during an open unit | 🔐 **Hard, but heuristic** (same parsing as the Bash gate): a script file that writes on its own is not caught |
+| An explanation of each changed file during the work, with "in plain words" pseudocode | A `PostToolUse` hook adds a reminder for Claude after the first change to each file | 💬 The reminder always arrives, but in measurements Claude acted on it for only ~1 file in 8. The guarantee is the next row |
+| Every changed file is explained by the end of the unit | `Stop` hook: files without a long enough text naming them in the transcript need a `#### <file>` heading under `### Explanation by file` in the review | 🔐 Presence of a heading per file is hard (one retry); **content** is soft |
 | A final review with an honest "Verification" section | `Stop` hook → won't let Claude finish without the headings | 🔐 Presence of the sections is hard (one retry); **content** is soft |
 | The developer's approach first, reasoning analysis, alternatives, explanations along the way, adapting to the developer's level, honesty | Output style (rules in every request) + mode context from hooks | 💬 **Soft**: raises the likelihood, doesn't guarantee it. Measured by eval scenarios |
 | "Unrelated task → new agreement" | A rule in the output style | 💬 Soft: a hook cannot judge whether tasks are related in meaning |
