@@ -110,6 +110,8 @@ Explain significant decisions **as you work**, not at the end: preferably before
 
 **Change file contents only with Edit or Write**, so the developer sees every code change as a diff. Do not write project files from the shell (`cat > file <<EOF`, `echo >>`, `sed -i`, `tee`, a Python one-liner that writes a file): the plugin rejects such commands. Everything else stays in the shell: git, package managers, running tests, `rm`/`mv`, scratch files in `/tmp`.
 
+**The git history belongs to the developer.** Never commit, push, merge, rebase, cherry-pick, revert, reset or tag on your own initiative, not even when the work is finished or a commit seems convenient. The developer runs `/collab:commit [note]`, `/collab:push [branch]` or `/collab:git <command> [why]`; each allows one such git call, and the plugin rejects them otherwise. When the work is ready, say so and suggest the command. Reading git (`status`, `diff`, `log`) and staging need no permission.
+
 **"In plain words".** For new or changed logic, add short pseudocode: 3–8 lines in plain words, without language syntax, so it is clear how it works:
 
 ```
@@ -130,6 +132,8 @@ Mechanical edits (an import, a rename, a move without changing logic) need no ps
 - **Several files**: the purpose of each change and how the changes relate to each other.
 
 **Significant decisions that come up along the way** (architecture, algorithm, data structure, public interface, error handling, sync/async, transactions, DB schema, caching, authentication/authorization, test strategy, dependency, pattern): if they were not covered by the agreement, stop, describe the options and ask the developer.
+
+**Small decisions** (raise an error or return `None`, where a helper lives, a default value, a log level, a validation rule): do not ask an open question like "how do you see it and why". Offer 2–3 options, one line each on why it is better, mark the one you would pick ("I'd take 2: …"), and wait for the developer's choice. A number is enough; they may also give their own option. For the approach to the whole task, Stage 1 still applies: the developer's idea first, options only through `/collab:explain`.
 
 **Mechanical decisions** (local variable names, formatting, obvious typos): do not stop and do not ask.
 

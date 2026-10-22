@@ -415,6 +415,88 @@ class PlanMode(GateTestCase):
         self.assertFalse(self.state.paused)
 
 
+class GitGate(GateTestCase):
+    """Commits, pushes and history-changing git calls need a one-off /collab:commit|push|git from the developer."""
+
+    def run_git(self, state, command, tool="Bash"):
+        event = {"tool_name": tool, "tool_input": {"command": command}, "cwd": str(self.project)}
+        pre = g.decide_pre_tool_use(event, state, self.env)
+        if self.decision(pre) == "deny":
+            return pre
+        g.decide_post_tool_use(event, state, self.env)
+        return None
+
+    def assertDenied(self, state, command, tool="Bash"):
+        out = self.run_git(state, command, tool)
+        self.assertEqual(self.decision(out), "deny", command)
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_gated_git_is_denied_without_permission_in_every_stage_but_off(self):
+        for stage in ("discussing", "agreed", "skipped"):
+            for cmd in ("git commit -m x", "git push", "git -C repo merge dev", "git rebase main",
+                        "git reset --hard HEAD~1", "git tag v1", "sudo git cherry-pick abc"):
+                with self.subTest(stage=stage, cmd=cmd):
+                    reason = self.assertDenied(g.SessionState(stage=stage), cmd)
+                    self.assertIn("/collab:commit", reason)
+        self.assertDenied(g.SessionState(stage="agreed"), "git commit -m x", tool="PowerShell")
+        self.assertIsNone(self.run_git(g.SessionState(stage="off"), "git commit -m x && git push --force"))
+
+    def test_reading_git_needs_no_permission(self):
+        for cmd in ("git status", "git log --oneline -5", "git diff HEAD", "git tag", "git tag -l 'v*'", "git add a.py"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.run_git(g.SessionState(stage="agreed"), cmd))
+
+    def test_commit_permission_after_the_review_allows_staging_and_one_commit(self):
+        state = g.SessionState()  # the review closed the unit: discussing
+        self.command(state, "collab:commit", "after review")
+        self.assertDenied(state, "git commit --amend -m x")
+        self.assertDenied(state, "git add a.py && git commit -m x && git push")
+        self.assertDenied(state, "rm a.py && git commit -m x")  # the discussing gate still sees rm
+        self.assertIsNone(self.run_git(state, "git add a.py b.py && git commit -m 'Add x'"))
+        self.assertEqual(state.git_grant, {})
+        self.assertDenied(state, "git commit -m again")
+
+    def test_push_goes_to_the_current_branch_by_default(self):
+        state = g.SessionState(stage="agreed")
+        self.command(state, "collab:push")
+        for cmd in ("git push origin main", "git push --force", "git push origin +HEAD", "git push origin :old"):
+            with self.subTest(cmd=cmd):
+                self.assertDenied(state, cmd)
+        self.assertIsNone(self.run_git(state, "git push -u origin HEAD"))
+        self.command(state, "collab:push")
+        self.assertIsNone(self.run_git(state, "git push"))
+
+    def test_push_to_a_named_branch(self):
+        state = g.SessionState(stage="agreed")
+        self.command(state, "collab:push", "feature-x")
+        self.assertDenied(state, "git push origin main")
+        self.assertDenied(state, "git push")
+        self.assertIsNone(self.run_git(state, "git push origin HEAD:feature-x"))
+
+    def test_collab_git_allows_one_call_of_that_action_with_any_flags(self):
+        state = g.SessionState(stage="agreed")
+        self.command(state, "collab:git", "git commit --amend fix the message typo")
+        self.assertDenied(state, "git rebase main")
+        self.assertIsNone(self.run_git(state, "git commit --amend -m 'Fixed'"))
+        self.command(state, "collab:git", "push --force origin feature")
+        self.assertIsNone(self.run_git(state, "git push --force origin feature"))
+
+    def test_collab_git_rejects_ungated_or_missing_actions_and_off(self):
+        for args in ("status", ""):
+            out, _ = self.command(g.SessionState(stage="agreed"), "collab:git", args)
+            self.assertEqual(out["decision"], "block")
+        out, _ = self.command(g.SessionState(stage="off"), "collab:commit")
+        self.assertEqual(out["decision"], "block")
+
+    def test_unused_permission_expires_on_the_next_message(self):
+        state = g.SessionState(stage="agreed")
+        self.command(state, "collab:commit")
+        g.decide_user_prompt({"prompt": "/collab:status"}, state, self.env)
+        self.assertTrue(state.git_grant)
+        g.decide_user_prompt({"prompt": "actually, wait"}, state, self.env)
+        self.assertDenied(state, "git commit -m x")
+
+
 class EditOnlyInOpenUnit(GateTestCase):
     """In an open unit, file contents in the project change only through Edit/Write; other shell writes run."""
 
@@ -432,7 +514,7 @@ class EditOnlyInOpenUnit(GateTestCase):
     ]
     ALLOWED = [
         ("Bash", "rm a.py && mv b.py c.py && mkdir -p d"),
-        ("Bash", "git add -A && git commit -m 'x'"),
+        ("Bash", "git add -A && git status"),
         ("Bash", "npm install lodash"),
         ("Bash", "pytest -q > /dev/null 2>&1"),
         ("Bash", "git show HEAD:a.py > /tmp/old_a.py"),

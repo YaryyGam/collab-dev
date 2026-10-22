@@ -15,6 +15,16 @@
   "verification_heading_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Проверка|Перевірка|Verification)\\b",
   "explain_section_pattern": "^#{2,4}\\s*(\\d+\\.\\s*)?(Объяснение по файлам|Пояснення по файлах|Explanation by file)\\b",
   "explain_min_chars": 200,
+  "git_gated": [
+    "commit",
+    "push",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "revert",
+    "reset",
+    "tag"
+  ],
   "edit_only": {
     "target_commands": [
       "tee",

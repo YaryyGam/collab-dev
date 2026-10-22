@@ -44,6 +44,10 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 - `explain_section_pattern`: the review section where unexplained files get their `#### <file>` heading.
 - `edit_only`: which shell constructs count as writing file contents in an open unit — `target_commands` (tee-like commands whose first argument is the file), `flag_writes` (in-place flags), `inline_write_markers` and `powershell_write_markers`. Redirections into the project are always checked. Tests: `EditOnlyInOpenUnit` in `tests/test_collab_gate.py`.
 
+### Choose which git actions need the developer's command
+
+`git_gated` in `config/gate.json` lists the git actions Claude may run only after `/collab:commit`, `/collab:push` or `/collab:git`: by default `commit`, `push`, `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `tag` (listing tags is always allowed). Remove an action to let Claude run it freely, add one (e.g. `pull`, `stash`) to gate it. Tests: `GitGate` in `tests/test_collab_gate.py`.
+
 ### Add a command that should count as a write
 
 For example, `alembic upgrade` changes the DB schema — block it until agreement:

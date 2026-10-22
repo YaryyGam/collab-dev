@@ -52,6 +52,13 @@ RESUMED_MESSAGE = (
     "\"go on\", start the next stage (TaskUpdate → in_progress). If it is feedback or a question, deal with it "
     "within the current stage, explain what you changed, and end your reply with a question again."
 )
+GIT_MESSAGE = (
+    "collab: commits, pushes and history-changing git commands run only with the developer's permission, "
+    "so this command was not run. Don't run it another way: tell the developer which command to type: "
+    "/collab:commit [note] for a commit, /collab:push [branch] for a push (the current branch if omitted), "
+    "/collab:git <command> [why] for merge, rebase, cherry-pick, revert, reset, tag, commit --amend or push --force. "
+    "Each permission covers one such git call."
+)
 SELF_PROTECT_MESSAGE = (
     "collab: only the developer may change the plugin's state files, through the /collab:* "
     "commands. Do not modify them."
@@ -86,6 +93,9 @@ class SessionState:
     planned: bool = False
     paused: bool = False
     stage_anchors: dict = field(default_factory=dict)  # like change_anchors, since the last pause
+    # one-off permission from /collab:commit|push|git; outlives units (commits come after the review),
+    # spent by the git call it allows or by the developer's next message
+    git_grant: dict = field(default_factory=dict)
 
     @property
     def changes(self) -> int:
@@ -232,8 +242,9 @@ def _subcommand(args: list) -> str:
     return ""
 
 
-def bash_write_reason(command: str, config: dict) -> str | None:
-    """Return a short description of why the command looks like a write, or None."""
+def bash_write_reason(command: str, config: dict, skip_git: bool = False) -> str | None:
+    """Return a short description of why the command looks like a write, or None.
+    skip_git: leave git calls to the git gate (a developer's /collab:commit|push|git covers them)."""
     cfg = config["bash"]
     stripped = _strip_literals(command)
 
@@ -242,7 +253,10 @@ def bash_write_reason(command: str, config: dict) -> str | None:
             return f"output redirected to a file ({target})"
 
     for segment in _SEPARATOR.split(stripped):
-        reason = _segment_write_reason(_command_words(segment, cfg["wrappers"]), command, cfg)
+        words = _command_words(segment, cfg["wrappers"])
+        if skip_git and words and _program_name(words[0]) == "git":
+            continue
+        reason = _segment_write_reason(words, command, cfg)
         if reason:
             return reason
     return None
@@ -287,7 +301,7 @@ _PS_SEPARATOR = re.compile(r"\|\||&&|[;|\n(){}]")
 _PS_REDIRECT = re.compile(r"(?:\d|\*)?>>?(?!&)\s*([^\s;|<>()]+)")
 
 
-def powershell_write_reason(command: str, config: dict) -> str | None:
+def powershell_write_reason(command: str, config: dict, skip_git: bool = False) -> str | None:
     """PowerShell flavour of bash_write_reason: cmdlets, aliases, .NET file APIs, redirects."""
     ps = config["powershell"]
     stripped = _QUOTED.sub(" Q ", _PS_HERESTRING.sub(" Q ", command))
@@ -306,6 +320,8 @@ def powershell_write_reason(command: str, config: dict) -> str | None:
         if not words:
             continue
         name = _program_name(words[0])
+        if skip_git and name == "git":
+            continue
         args = [a.lower() for a in words[1:]]
         if name in ps["write_commands"]:
             return f"command {name}"
@@ -319,10 +335,68 @@ def powershell_write_reason(command: str, config: dict) -> str | None:
     return None
 
 
-def shell_write_reason(tool: str, command: str, config: dict) -> str | None:
+def shell_write_reason(tool: str, command: str, config: dict, skip_git: bool = False) -> str | None:
     if tool == "PowerShell":
-        return powershell_write_reason(command, config)
-    return bash_write_reason(command, config)
+        return powershell_write_reason(command, config, skip_git)
+    return bash_write_reason(command, config, skip_git)
+
+
+# --------------------------------------------------------------------------- #
+# Git gate: history-changing git commands only with the developer's one-off permission
+# --------------------------------------------------------------------------- #
+
+_PUSH_FORCE = ("-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d")
+
+
+def _git_calls(tool: str, command: str, env: Env) -> list:
+    """(action, args) for each git call in the command whose action is in git_gated."""
+    if tool == "PowerShell":
+        stripped, separator = _QUOTED.sub(" Q ", _PS_HERESTRING.sub(" Q ", command)), _PS_SEPARATOR
+    else:
+        stripped, separator = _strip_literals(command), _SEPARATOR
+    calls = []
+    for segment in separator.split(stripped):
+        words = _command_words(segment, env.config["bash"]["wrappers"])
+        while words and words[0] in ("&", "."):  # PowerShell call operators
+            words = words[1:]
+        if not words or _program_name(words[0]) != "git":
+            continue
+        sub = _subcommand(words[1:])
+        if sub not in env.config.get("git_gated", []):
+            continue
+        args = words[words.index(sub) + 1:]
+        if sub == "tag" and (not args or args[0] in ("-l", "--list")):
+            continue  # listing tags changes nothing
+        calls.append((sub, args))
+    return calls
+
+
+def _grant_allows(grant: dict, sub: str, args: list) -> bool:
+    if not grant:
+        return False
+    if grant["action"] == "git":
+        return sub == grant["subcommand"]
+    if sub != grant["action"]:
+        return False
+    if sub == "commit":
+        return "--amend" not in args
+    # push: never forced; only into the named branch, or the current one (no refspec / HEAD)
+    if any(a in _PUSH_FORCE or a.startswith("--force") for a in args):
+        return False
+    refs = [a for a in args if not a.startswith("-")][1:]  # the first positional is the remote
+    if any(r.startswith(("+", ":")) for r in refs):
+        return False
+    if not grant.get("branch"):
+        return all(r == "HEAD" for r in refs)
+    return bool(refs) and all(r.split(":")[-1] == grant["branch"] for r in refs)
+
+
+def _git_denied(tool: str, command: str, state: SessionState, env: Env) -> str | None:
+    """The first gated git call the developer's permission doesn't cover, as "git <action>"."""
+    for sub, args in _git_calls(tool, command, env):
+        if not _grant_allows(state.git_grant, sub, args):
+            return f"git {sub}"
+    return None
 
 
 def _inside_project(target: str, cwd: Path, env: Env) -> bool:
@@ -444,6 +518,7 @@ def decide_user_prompt(event: dict, state: SessionState, env: Env) -> dict | Non
     # /collab:* commands get a fresh status from the expansion hook instead
     if (event.get("prompt") or "").lstrip().startswith("/collab:"):
         return None
+    state.git_grant = {}  # an unused git permission does not outlive the turn it was given for
     if state.paused and state.stage in OPEN_STAGES:
         # any reply lifts the pause; whether it means "go on" or "fix this" is Claude's call
         state.paused = False
@@ -476,6 +551,28 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
             note += PLAN_START_MESSAGE
         else:
             note += "Then implement, explaining decisions along the way."
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
+
+    if name in ("commit", "push", "git"):
+        if state.stage == "off":
+            return _block("collab is off in this session (/collab:off): git is not restricted, just ask Claude."), []
+        words = args.split()
+        if name == "git":
+            if words and words[0] == "git":
+                words = words[1:]
+            sub = words[0] if words else ""
+            if sub not in env.config.get("git_gated", []):
+                gated = ", ".join(env.config.get("git_gated", []))
+                return _block(f"/collab:git <command> [why]: give a git command that needs permission ({gated}). "
+                              f"Other git commands ({sub or 'status, log, add…'}) need none: just ask Claude."), []
+        else:
+            sub = name
+        state.git_grant = {"action": name, "subcommand": sub, "branch": words[0] if name == "push" and words else ""}
+        note = {
+            "commit": "The developer allowed one commit (/collab:commit). Follow the command's instructions.",
+            "push": "The developer allowed one push (/collab:push). Follow the command's instructions.",
+            "git": f"The developer allowed one `git {sub}` call (/collab:git). Follow the command's instructions.",
+        }[name]
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
 
     if name == "skip":
@@ -528,11 +625,17 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if tool in SHELL_TOOLS and _mentions_path(tool_input.get("command") or "", env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
 
+    if state.stage != "off" and tool in SHELL_TOOLS:
+        denied = _git_denied(tool, tool_input.get("command") or "", state, env)
+        if denied:
+            return _deny(f"{GIT_MESSAGE} (detected: {denied})")
+    skip_git = bool(state.git_grant)  # the developer's permission also covers staging etc. for it
+
     if state.stage in OPEN_STAGES and state.paused:
         if tool in write_tools and _is_inside(_tool_path(tool_input), env.project_dir):
             return _deny(PAUSED_MESSAGE)
         if tool in SHELL_TOOLS:
-            reason = shell_write_reason(tool, tool_input.get("command") or "", env.config)
+            reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
             return _deny(f"{PAUSED_MESSAGE} (detected: {reason})") if reason else None
         if tool == "TaskUpdate" and tool_input.get("status") in ("in_progress", "completed"):
             return _deny(PAUSED_MESSAGE)
@@ -549,7 +652,7 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
             return None  # notes, memory, scratchpad — outside the code under discussion
         return _deny(GATE_MESSAGE)
     if tool in SHELL_TOOLS:
-        reason = shell_write_reason(tool, tool_input.get("command") or "", env.config)
+        reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
         if reason:
             return _deny(f"{GATE_MESSAGE} (detected: {reason})")
     return None
@@ -588,10 +691,13 @@ def _stage_done_message(state: SessionState, env: Env) -> str:
 def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | None:
     """Track changes in the open unit; on the first change of each file, ask for an explanation.
     In a planned unit, a stage marked completed pauses the work until the developer replies."""
-    if state.stage not in OPEN_STAGES:
-        return None
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input") or {}
+    if state.git_grant and tool in SHELL_TOOLS and any(
+            _grant_allows(state.git_grant, sub, args) for sub, args in _git_calls(tool, tool_input.get("command") or "", env)):
+        state.git_grant = {}  # one permission, one git call — in any stage
+    if state.stage not in OPEN_STAGES:
+        return None
     if tool == "TaskUpdate" and state.planned and not state.paused and tool_input.get("status") == "completed":
         state.paused = True
         return {"decision": "block", "reason": _stage_done_message(state, env)}
