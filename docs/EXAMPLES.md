@@ -12,8 +12,8 @@ All examples are **real Claude responses** from test runs (manual and `claude pl
 
 Writing files is blocked right now: the collab plugin is in the `discussing` stage until the approach is agreed. I won't work around the block. Options:
 
-- **Skip the discussion for this task:** `/collab:skip <reason>`. After that I'll write the code right away, briefly explain decisions along the way and do a short review at the end.
-- **Turn the mode off for the rest of the session:** `/collab:off <reason>`.
+- **Skip the discussion for this task:** `/collab:skip [reason]`. After that I'll write the code right away, briefly explain decisions along the way and do a short review at the end.
+- **Turn the mode off for the rest of the session:** `/collab:off [reason]`.
 - **Agree quickly:** tell me in a sentence or two how you would build the slug and why. For example, with `unicodedata` + a regex, with `python-slugify`, or with manual transliteration of Cyrillic.
 
 One thing depends on your answer: what to do with Cyrillic in titles…
@@ -42,7 +42,7 @@ With the plugin, `slugify.py` was **not created**: the write was blocked by the 
 > 1. Simply rename the function in all three places.
 > 2. Rename it and temporarily keep the old name as an alias so external code doesn't break.
 >
-> Which option would you choose and why? One sentence is enough. … If such a small task doesn't need a discussion, you can skip it with `/collab:skip <reason>`.
+> Which option would you choose and why? One sentence is enough. … If such a small task doesn't need a discussion, you can skip it with `/collab:skip [reason]`.
 
 ---
 

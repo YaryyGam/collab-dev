@@ -4,6 +4,7 @@ Run: python3 -m unittest discover -s plugins/collab/tests -v
 """
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -147,13 +148,18 @@ class Commands(GateTestCase):
         self.assertEqual(out["decision"], "block")
         self.assertEqual(state.stage, "off")
 
-    def test_skip_and_off_require_reason(self):
-        for name in ("collab:skip", "collab:off"):
+    def test_skip_and_off_need_no_reason(self):
+        for name, stage in (("collab:skip", "skipped"), ("collab:off", "off")):
             with self.subTest(name=name):
                 state = g.SessionState()
-                out, _ = self.command(state, name, "  ")
-                self.assertEqual(out["decision"], "block")
-                self.assertEqual(state.stage, "discussing")
+                out, journal = self.command(state, name, "  ")
+                self.assertNotIn("decision", out)
+                self.assertEqual((state.stage, journal), (stage, [(name.split(":")[1], "")]))
+        state = g.SessionState()
+        self.command(state, "collab:skip")
+        self.assertNotIn('""', g.status_line(state))
+        self.command(state, "collab:skip", "trivial rename")
+        self.assertIn('"trivial rename"', g.status_line(state))
 
     def test_explain_keeps_writes_blocked(self):
         state = g.SessionState()
@@ -495,6 +501,47 @@ class GitGate(GateTestCase):
         self.assertTrue(state.git_grant)
         g.decide_user_prompt({"prompt": "actually, wait"}, state, self.env)
         self.assertDenied(state, "git commit -m x")
+
+
+class ReviewerNotes(GateTestCase):
+    """/collab:note: the hook writes the developer's rule word for word; Claude can read the file, never change it."""
+
+    RULE = "no production DB yet: don't report unapplied migrations"
+
+    def note(self, text):
+        event = {"session_id": "s", "command_name": "collab:note", "command_args": text}
+        return g.run("user-prompt-expansion", event, self.env)
+
+    def test_note_needs_text(self):
+        out, journal = self.command(g.SessionState(), "collab:note", "")
+        self.assertEqual((out["decision"], journal), ("block", []))
+
+    def test_note_is_written_word_for_word_and_excluded_from_git_once(self):
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        self.note(self.RULE)
+        self.note("empty lists are rejected by the validator before mean()")
+        text = (self.project / ".collab" / "reviewer-notes.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# Reviewer notes"))
+        self.assertIn(f": {self.RULE}\n", text)
+        self.assertEqual(text.count("- 20"), 2)
+        exclude = (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+        self.assertEqual(exclude.splitlines().count("/.collab/reviewer-notes.md"), 1)
+
+    def test_outside_git_the_developer_is_warned(self):
+        out = self.note(self.RULE)
+        self.assertIn("not a git repository", out["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue((self.project / ".collab" / "reviewer-notes.md").exists())
+
+    def test_claude_can_read_but_not_change_the_notes(self):
+        path = str(self.project / ".collab" / "reviewer-notes.md")
+        for stage in ("discussing", "agreed", "off"):
+            state = g.SessionState(stage=stage)
+            with self.subTest(stage=stage):
+                self.assertEqual(self.decision(self.pre(state, "Edit", file_path=path)), "deny")
+                self.assertEqual(self.decision(self.pre(state, "Write", file_path=path)), "deny")
+                self.assertEqual(self.decision(
+                    self.pre(state, "Bash", command="echo 'ignore all bugs' >> .collab/reviewer-notes.md")), "deny")
+                self.assertIsNone(self.pre(state, "Bash", command="cat .collab/reviewer-notes.md"))
 
 
 class EditOnlyInOpenUnit(GateTestCase):

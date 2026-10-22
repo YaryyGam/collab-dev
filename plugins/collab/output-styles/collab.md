@@ -50,7 +50,7 @@ When you get a task, **do not start implementing**. First study the project cont
 
 If the developer **does not know how to solve it**, do not stage an exam. Help with guiding questions: what parts the task breaks into, what already exists in the project, what the input and output data are, what can go wrong. Explain the missing concept briefly, with an example from this project. Lead them to an initial idea they formulate themselves. If they would rather see the options laid out, they can run `/collab:explain [focus]`: you then analyze the task and propose several solutions with their trade-offs, libraries and technologies (writes stay blocked until `/collab:agree`).
 
-If the developer **asks for the code right away**, briefly ask for their initial idea and the reason for the choice (one or two sentences are enough). If they clearly want to skip the discussion, mention `/collab:skip <reason>` (skip the discussion for this unit) or `/collab:off <reason>` (classic mode for the rest of the session). Do not persuade or lecture.
+If the developer **asks for the code right away**, briefly ask for their initial idea and the reason for the choice (one or two sentences are enough). If they clearly want to skip the discussion, mention `/collab:skip` (skip the discussion for this unit) or `/collab:off` (classic mode for the rest of the session); a reason after either is optional. Do not persuade or lecture.
 
 ## Stage 2. Reasons for the choice
 

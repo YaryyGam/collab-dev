@@ -60,7 +60,7 @@ The goal is not the maximum number of questions but the **maximum conscious part
 > 2. **What to return**: still a list, or an object with `items/total`? This decides whether the current test breaks.
 > 3. **Why** this choice?
 >
-> Skip the discussion: `/collab:skip <reason>` (this task) or `/collab:off <reason>` (for the rest of the session).
+> Skip the discussion: `/collab:skip [reason]` (this task) or `/collab:off [reason]` (for the rest of the session).
 
 > **Developer:** `/collab:agree offset and limit as optional parameters, by default return everyone so the test and the calling code don't break; there is little data, so a cursor isn't needed`
 
@@ -144,16 +144,17 @@ All commands are invoked **by a human only**: Claude cannot run them itself (`di
 | `/collab:commit [note]` | Allows Claude **one commit**: it looks at all changes, stages files by name and writes a message saying what changed in each file. Without this command Claude can't commit at all (the hook rejects it), in any stage except `off` | `/collab:commit` |
 | `/collab:push [branch]` | Allows **one push** into the given branch, or the current one if none is given. Never forced | `/collab:push feature/pagination` |
 | `/collab:git <command> [why]` | Allows **one** history-changing git command: `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `tag`, `commit --amend`, `push --force` | `/collab:git rebase origin/main bring in the fresh main` |
-| `/collab:review [all]` | A **separate read-only agent** reviews what was just done (uncommitted changes, else unpushed commits, else the last commit): bugs, the project's tests, and docs or comments anywhere in the project that no longer match the code. `all` reviews the whole project. You get numbered findings; nothing is fixed until you name the numbers and run `/collab:skip` | `/collab:review` |
+| `/collab:review [diff]` | A **separate read-only agent** reviews the whole project: bugs, the project's tests, and docs or comments that no longer match the code. `diff` reviews only what was just done (uncommitted changes, else unpushed commits, else the last commit), with docs and comments checked across the whole project. It skips what your `/collab:note` rules cover and lists what it skipped. You get numbered findings; nothing is fixed until you name the numbers and run `/collab:skip` | `/collab:review diff` |
+| `/collab:note <rule>` | Records a rule for the reviewer **word for word**: a decision made on purpose, the project's state, a corner case covered elsewhere. The plugin itself appends it to `.collab/reviewer-notes.md` and keeps that file out of git via `.git/info/exclude` (local, the repository doesn't change). Claude can read the file but not change it; edit or delete lines by hand | `/collab:note no production DB yet: don't report unapplied migrations` |
 | `/collab:explain [focus]` | For when you **don't know how to solve the task** or which approach to pick. Claude analyzes the task itself and proposes 2–4 solution options: how each works, which libraries and technologies it would use and why, pros, cons, when each wins, plus a recommendation. Writing stays blocked: you pick an option and confirm it with `/collab:agree` in your own words | `/collab:explain how to rate-limit the public API` |
-| `/collab:skip <reason>` | Skips the approach discussion **for one unit of work**. Explanations along the way and the final review remain | `/collab:skip standard CRUD following the orders pattern` |
-| `/collab:off <reason>` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
+| `/collab:skip [reason]` | Skips the approach discussion **for one unit of work**. Explanations along the way and the final review remain. The reason is optional; if given, it shows in the status | `/collab:skip standard CRUD following the orders pattern` |
+| `/collab:off [reason]` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
 | `/collab:on` | Turns collaborative development back on in the current session | |
 | `/collab:done` | Closes the current unit of work manually; the next task starts with a new agreement | |
 | `/collab:mode <mode>` | Changes the mode for the rest of the session: `learning`, `collaborative`, `review` | `/collab:mode learning` |
 | `/collab:status` | Shows the mode, stage, current agreement and what to do next | |
 
-> 💡 If you have no idea what's going on and just need it done, `/collab:off <reason>` honestly switches to the normal mode. Every switch is written to a **local** journal (`~/.claude/plugins/data/<plugin>/journal.jsonl`). It is never sent anywhere and exists for you: it shows which topics are worth brushing up on.
+> 💡 If you have no idea what's going on and just need it done, `/collab:off [reason]` honestly switches to the normal mode. Every switch is written to a **local** journal (`~/.claude/plugins/data/<plugin>/journal.jsonl`). It is never sent anywhere and exists for you: it shows which topics are worth brushing up on.
 
 ---
 
@@ -183,13 +184,13 @@ A **unit of work** is one coherent piece of functionality ("pagination for the u
                 ▼                                              │
         ┌──────────────┐  /collab:agree <summary>    ┌────────┐ │
  start ►│  discussing  │────────────────────────────►│ agreed │ │
-session │writes BLOCKED│  /collab:skip <reason>      │skipped │ │
+session │writes BLOCKED│  /collab:skip [reason]      │skipped │ │
         └──────────────┘────────────────────────────►└────────┘ │
                 ▲                                        │      │
                 │  "## Final review" + "### Verification"│      │
                 └──────────── or /collab:done ◄──────────┘      │
                                                                 │
-        /collab:off <reason> (from any stage) ────────►  off  ──┘
+        /collab:off [reason] (from any stage) ────────►  off  ──┘
                                             (classic until the session ends)
 ```
 
@@ -219,6 +220,7 @@ The plugin combines two kinds of mechanisms, and it is important to be honest ab
 | Claude never commits, pushes or rewrites history on its own | `PreToolUse` rejects `git commit/push/merge/rebase/cherry-pick/revert/reset/tag` unless the developer's `/collab:commit`, `/collab:push` or `/collab:git` gave a one-off permission (only a typed command can, via `UserPromptExpansion`) | 🔐 **Hard, but heuristic**: git called from a script, an alias or another tool (`make release`, `gh pr merge`) is not seen |
 | Small decisions come as 2–3 options; a number is enough to answer | Rule in the output style | 💬 Soft |
 | `/collab:review` checks with fresh eyes and changes nothing | The `collab:reviewer` agent gets only the mode, not the author's reasoning; it has no Write/Edit tools | 🔐 No edits is hard for files (no tools); its Bash is restricted by instruction only. **What it finds** is soft |
+| Reviewer notes are only the developer's words | `/collab:note` is written by the hook itself (`UserPromptExpansion`, a typed command only); `PreToolUse` rejects Claude's Write/Edit of the file and shell writes that name it, in every stage | 🔐 **Hard, but heuristic** for the shell (a command that builds the path otherwise isn't seen). That the reviewer **honours** the notes is soft |
 | `/collab:plan`: a pause after every stage, with the stage's files explained | `PostToolUse` on `TaskUpdate → completed` pauses the unit; `PreToolUse` blocks changes and stage updates until your next message; `Stop` checks that each file of the stage is named in an explanation | 🔐 The pause is hard once a stage is marked completed; **marking it** and judging whether your reply means "go on" are soft |
 | The developer's approach first, reasoning analysis, alternatives, explanations along the way, adapting to the developer's level, honesty | Output style (rules in every request) + mode context from hooks | 💬 **Soft**: raises the likelihood, doesn't guarantee it. Measured by eval scenarios |
 | "Unrelated task → new agreement" | A rule in the output style | 💬 Soft: a hook cannot judge whether tasks are related in meaning |
@@ -291,7 +293,7 @@ The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/
 │   ├── output-styles/collab.md         # ⭐ CORE PROCESS RULES (enabled automatically)
 │   ├── modes/                          # learning / collaborative / review: mode differences
 │   ├── agents/reviewer.md              # read-only reviewer behind /collab:review
-│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, explain, skip, off, on, done, mode, status
+│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, note, explain, skip, off, on, done, mode, status
 │   ├── hooks/hooks.json                # which events invoke the script
 │   ├── scripts/run_hook.sh             # hook launcher: finds python3 / python / py -3
 │   ├── scripts/collab_gate.py          # hard logic: blocking, stages, review check

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -30,8 +31,8 @@ GATE_MESSAGE = (
     "collab: writing to the project is blocked: the approach for this unit of work has not been "
     "agreed on yet. Continue the discussion: the developer's approach → their reasons → analysis → "
     "alternatives → joint choice. Writing opens once the developer runs "
-    "/collab:agree <the approach in their own words>, or /collab:skip <reason>, or /collab:off "
-    "<reason> themselves. Do not try to get around the block some other way."
+    "/collab:agree <the approach in their own words>, /collab:plan <the same>, /collab:skip or /collab:off "
+    "themselves. Do not try to get around the block some other way."
 )
 EDIT_ONLY_MESSAGE = (
     "collab: change the contents of project files only with Edit or Write, so the developer sees every "
@@ -58,6 +59,10 @@ GIT_MESSAGE = (
     "/collab:commit [note] for a commit, /collab:push [branch] for a push (the current branch if omitted), "
     "/collab:git <command> [why] for merge, rebase, cherry-pick, revert, reset, tag, commit --amend or push --force. "
     "Each permission covers one such git call."
+)
+NOTES_PROTECT_MESSAGE = (
+    "collab: the reviewer notes are the developer's rules: only they write them, with /collab:note <rule>. "
+    "Do not change this file; if a note looks wrong or outdated, tell the developer."
 )
 SELF_PROTECT_MESSAGE = (
     "collab: only the developer may change the plugin's state files, through the /collab:* "
@@ -134,6 +139,46 @@ def env_from_os(event: dict) -> Env:
     )
 
 
+NOTES_PATH = Path(".collab") / "reviewer-notes.md"  # relative to the project root
+NOTES_HEADER = (
+    "# Reviewer notes\n\n"
+    "Rules from the developer for /collab:review: the reviewer reads this file before every review and does not\n"
+    "report what a note covers. Added only with /collab:note <rule>; edit or delete lines here by hand.\n"
+    "Kept out of git through .git/info/exclude.\n\n"
+)
+
+
+def notes_file(env: Env) -> Path:
+    return env.project_dir / NOTES_PATH
+
+
+def write_reviewer_note(env: Env, text: str) -> bool:
+    """Append the developer's rule word for word and keep the file out of git via .git/info/exclude.
+    Returns False when the file could not be excluded (not a git repository)."""
+    path = notes_file(env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        if f.tell() == 0:
+            f.write(NOTES_HEADER)
+        f.write(f"- {time.strftime('%Y-%m-%d')}: {text}\n")
+    try:  # --git-path also finds info/exclude in a worktree, where .git is a file
+        out = subprocess.run(["git", "-C", str(env.project_dir), "rev-parse", "--git-path", "info/exclude"],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0 or not out.stdout.strip():
+        return False
+    exclude = Path(out.stdout.strip())
+    exclude = exclude if exclude.is_absolute() else env.project_dir / exclude
+    entry = "/" + NOTES_PATH.as_posix()
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if entry not in existing.splitlines():
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with open(exclude, "a", encoding="utf-8") as f:
+            f.write(("" if not existing or existing.endswith("\n") else "\n") + entry + "\n")
+    return True
+
+
 def state_path(env: Env, session_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id or "unknown")
     return env.data_dir / "sessions" / f"{safe}.json"
@@ -182,7 +227,8 @@ def status_line(state: SessionState) -> str:
     if state.stage == "agreed":
         line += f"\nAgreed by the developer: \"{state.agreement}\""
     if state.stage == "skipped":
-        line += f"\nDiscussion skipped at the developer's request: \"{state.agreement}\". Explanations along the way and the final review are mandatory."
+        reason = f": \"{state.agreement}\"" if state.agreement else ""
+        line += f"\nDiscussion skipped at the developer's request{reason}. Explanations along the way and the final review are mandatory."
     if state.planned and state.stage in OPEN_STAGES:
         line += ("\nPlan: paused, waiting for the developer's reply (changes and stage updates blocked)." if state.paused
                  else "\nPlan: a stage is in progress; marking it completed pauses the work until the developer replies.")
@@ -553,6 +599,15 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
             note += "Then implement, explaining decisions along the way."
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
 
+    if name == "note":
+        if not args:
+            return _block("Write the rule for the reviewer: /collab:note <rule>, for example "
+                          "/collab:note no production DB yet: don't report unapplied migrations"), []
+        # run() writes the file: decide_* stay free of disk access
+        note = (f"The developer added a reviewer note; the plugin wrote it word for word to {NOTES_PATH.as_posix()}: "
+                f"\"{args}\". Confirm it in one line. Do not edit that file yourself.")
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("note", args)]
+
     if name in ("commit", "push", "git"):
         if state.stage == "off":
             return _block("collab is off in this session (/collab:off): git is not restricted, just ask Claude."), []
@@ -575,15 +630,11 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
         }[name]
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
 
-    if name == "skip":
-        if not args:
-            return _block("Give a reason for skipping the discussion: /collab:skip <reason>"), []
+    if name == "skip":  # the reason is optional: shown in the status when given
         state.open_unit("skipped", args)
         return _context("UserPromptExpansion", status_line(state)), [("skip", args)]
 
-    if name == "off":
-        if not args:
-            return _block("Give a reason (a couple of words is enough): /collab:off <reason>. Applies until the end of the session."), []
+    if name == "off":  # the reason is optional: kept in the journal when given
         state.open_unit("off", args)
         return _context("UserPromptExpansion", status_line(state)), [("off", args)]
 
@@ -624,6 +675,12 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
         return _deny(SELF_PROTECT_MESSAGE)
     if tool in SHELL_TOOLS and _mentions_path(tool_input.get("command") or "", env.data_dir):
         return _deny(SELF_PROTECT_MESSAGE)
+    # reviewer notes: written only by the hook on /collab:note; reading them stays open
+    if tool in write_tools and _is_inside(_tool_path(tool_input), notes_file(env)):
+        return _deny(NOTES_PROTECT_MESSAGE)
+    command = tool_input.get("command") or ""
+    if tool in SHELL_TOOLS and NOTES_PATH.name in command and shell_write_reason(tool, command, env.config):
+        return _deny(NOTES_PROTECT_MESSAGE)
 
     if state.stage != "off" and tool in SHELL_TOOLS:
         denied = _git_denied(tool, tool_input.get("command") or "", state, env)
@@ -871,6 +928,10 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
         out, journal = decide_command(event, state, env)
         for kind, detail in journal:
             append_journal(env, session_id, kind, detail)
+            if kind == "note" and not write_reviewer_note(env, detail):
+                out["hookSpecificOutput"]["additionalContext"] += (
+                    "\nThe project is not a git repository, so the notes file could not be excluded from git: "
+                    "tell the developer.")
     elif event_name == "pre-tool-use":
         return decide_pre_tool_use(event, state, env)  # read-only: no save
     elif event_name == "post-tool-use":
