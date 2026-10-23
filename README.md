@@ -151,6 +151,7 @@ All commands are invoked **by a human only**: Claude cannot run them itself (`di
 | `/collab:off [reason]` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
 | `/collab:on` | Turns collaborative development back on in the current session | |
 | `/collab:done` | Closes the current unit of work manually; the next task starts with a new agreement | |
+| `/collab:resume` | Reopens the **last closed** unit of work with the same agreement, for when Claude gave the final review (or you ran `/collab:done`) before everything agreed was done. No new restatement needed. When a unit closes, the plugin tells you so and names this command | `/collab:resume` |
 | `/collab:mode <mode>` | Changes the mode for the rest of the session: `learning`, `collaborative`, `review` | `/collab:mode learning` |
 | `/collab:status` | Shows the mode, stage, current agreement and what to do next | |
 
@@ -216,7 +217,8 @@ The plugin combines two kinds of mechanisms, and it is important to be honest ab
 | Code changes are visible as diffs | `PreToolUse` hook rejects shell commands that write file contents in the project during an open unit | 🔐 **Hard, but heuristic** (same parsing as the Bash gate): a script file that writes on its own is not caught |
 | An explanation of each changed file during the work, with "in plain words" pseudocode | A `PostToolUse` hook adds a reminder for Claude after the first change to each file | 💬 The reminder always arrives, but in measurements Claude acted on it for only ~1 file in 8. The guarantee is the next row |
 | Every changed file is explained by the end of the unit | `Stop` hook: files without a long enough text naming them in the transcript need a `#### <file>` heading under `### Explanation by file` in the review | 🔐 Presence of a heading per file is hard (one retry); **content** is soft |
-| A final review with an honest "Verification" section | `Stop` hook → won't let Claude finish without the headings | 🔐 Presence of the sections is hard (one retry); **content** is soft |
+| A final review with an honest "Verification" section | `Stop` hook → won't let Claude finish without the headings (`## Final review` / `### Verification`, written in English in any conversation; Russian and Ukrainian variants are accepted too) | 🔐 Presence of the sections is hard (one retry); **content** is soft |
+| The unit is not closed early without you noticing | `Stop` tells Claude to check the agreement point by point before a review; a closed unit is announced to you with `/collab:resume` to reopen it | 💬 Not reviewing early is soft; 🔒 the announcement and `/collab:resume` are hard |
 | Claude never commits, pushes or rewrites history on its own | `PreToolUse` rejects `git commit/push/merge/rebase/cherry-pick/revert/reset/tag` unless the developer's `/collab:commit`, `/collab:push` or `/collab:git` gave a one-off permission (only a typed command can, via `UserPromptExpansion`) | 🔐 **Hard, but heuristic**: git called from a script, an alias or another tool (`make release`, `gh pr merge`) is not seen |
 | Small decisions come as 2–3 options; a number is enough to answer | Rule in the output style | 💬 Soft |
 | `/collab:review` checks with fresh eyes and changes nothing | The `collab:reviewer` agent gets only the mode, not the author's reasoning; it has no Write/Edit tools | 🔐 No edits is hard for files (no tools); its Bash is restricted by instruction only. **What it finds** is soft |
@@ -271,7 +273,8 @@ The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/
 | Symptom | Cause and fix |
 |---|---|
 | `/collab:*` is not in the menu | The plugin is not enabled: `/plugin` → check `collab@collab-dev`; after edits, `/reload-plugins` |
-| Claude says "writes are blocked" even though you agreed | The agreement wasn't confirmed with the command. Run `/collab:agree <summary>`; a spoken "yes" is not enough |
+| Claude says "writes are blocked" even though you agreed | The agreement wasn't confirmed with the command. Run `/collab:agree <summary>`; a spoken "yes" is not enough. The plugin also shows you this hint when it blocks a write, and Claude ends the discussion with a draft `/collab:agree …` line to put into your own words |
+| Writes got blocked right after Claude's summary, though work remained | The final review closed the unit early. Run `/collab:resume`: the same agreement opens again and Claude continues with what is left |
 | `/collab:agree` is rejected | The summary is shorter than the minimum (6 words). Describe the approach and the reason |
 | A read-only Bash command is blocked | A false positive of the heuristic (for example, `>` in an unquoted argument). Report it: the command can be added to the exceptions in `gate.json`; Claude can use Read/Grep |
 | The message "internal hook error, writes are blocked" | The script failed; the block deliberately fails closed. Run with `COLLAB_DEBUG=1` (see below) and report it; as a workaround, disable the plugin in `/plugin` |
@@ -293,7 +296,7 @@ The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/
 │   ├── output-styles/collab.md         # ⭐ CORE PROCESS RULES (enabled automatically)
 │   ├── modes/                          # learning / collaborative / review: mode differences
 │   ├── agents/reviewer.md              # read-only reviewer behind /collab:review
-│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, note, explain, skip, off, on, done, mode, status
+│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, note, explain, skip, off, on, done, resume, mode, status
 │   ├── hooks/hooks.json                # which events invoke the script
 │   ├── scripts/run_hook.sh             # hook launcher: finds python3 / python / py -3
 │   ├── scripts/collab_gate.py          # hard logic: blocking, stages, review check

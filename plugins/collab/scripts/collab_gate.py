@@ -40,6 +40,17 @@ EDIT_ONLY_MESSAGE = (
     "Everything else stays in the shell: git, package managers, tests, rm/mv. A scratch file outside the "
     "project can be written with Write or redirected into /tmp."
 )
+REVIEW_HEADINGS = (
+    "write the heading literally as \"## Final review\" and the section \"### Verification\" in English, "
+    "whatever language you use with the developer (the text under them stays in their language): "
+    "the plugin recognizes the review by these headings."
+)
+# Shown to the developer (systemMessage), not only to Claude: what they type to let the work go on.
+GATE_HINT = ("collab: Claude tried to change files, but the approach for this unit of work is not agreed yet. "
+             "To allow it: /collab:agree <the approach in your own words>, /collab:plan <the same>, or /collab:skip.")
+PAUSED_HINT = "collab: the plan is paused after a stage: reply to Claude to continue."
+GIT_HINT = ("collab: Claude needs your permission for git: /collab:commit, /collab:push [branch] "
+            "or /collab:git <command>.")
 PLAN_START_MESSAGE = (
     "The developer asked for a staged plan. Create it as tasks with TaskCreate, one per stage, then stop and "
     "show the plan: writes and starting a stage are blocked until the developer replies."
@@ -101,6 +112,8 @@ class SessionState:
     # one-off permission from /collab:commit|push|git; outlives units (commits come after the review),
     # spent by the git call it allows or by the developer's next message
     git_grant: dict = field(default_factory=dict)
+    # the unit the last review or /collab:done closed, so /collab:resume can reopen it
+    last_unit: dict = field(default_factory=dict)
 
     @property
     def changes(self) -> int:
@@ -119,6 +132,7 @@ class SessionState:
     def close_unit(self) -> None:
         if self.stage in OPEN_STAGES:
             self.units_closed += 1
+            self.last_unit = {"stage": self.stage, "agreement": self.agreement}  # for /collab:resume
         self.open_unit("discussing")
 
 
@@ -531,14 +545,18 @@ def _context(event_name: str, text: str) -> dict:
     return {"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": text}}
 
 
-def _deny(reason: str) -> dict:
-    return {
+def _deny(reason: str, hint: str = "") -> dict:
+    """reason goes to Claude; hint, if any, is shown to the developer (what they can type to go on)."""
+    out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
         }
     }
+    if hint:
+        out["systemMessage"] = hint
+    return out
 
 
 def _block(reason: str, event_name: str = "UserPromptExpansion") -> dict:
@@ -648,6 +666,20 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
         state.open_unit("discussing")
         return _context("UserPromptExpansion", status_line(state)), [("on", "")]
 
+    if name == "resume":
+        if state.stage == "off":
+            return _block("collab is off in this session (/collab:off). Turn it back on with /collab:on."), []
+        if state.stage in OPEN_STAGES:
+            return _block("A unit of work is already open: there is nothing to resume. /collab:status shows it."), []
+        if not state.last_unit:
+            return _block("No closed unit of work to resume in this session. Agree on the approach with /collab:agree."), []
+        last, state.last_unit = state.last_unit, {}
+        state.open_unit(last["stage"], last["agreement"])
+        note = ("The developer reopened the last unit of work with the same agreement: it was closed before the work "
+                "was finished. Continue with what the agreement covers and is not done yet, and give the final review "
+                "only when all of it is done.")
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("resume", last["agreement"])]
+
     if name == "done":
         state.close_unit()
         return _context("UserPromptExpansion", "The developer closed the unit of work.\n\n" + status_line(state)), [("done", "")]
@@ -663,6 +695,15 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
         return _context("UserPromptExpansion", info), []
 
     return None, []
+
+
+def _gate_hint(state: SessionState) -> str:
+    """What the developer can type when the discussion gate blocks a write; right after a unit closed,
+    reopening it is the likelier wish."""
+    if state.last_unit:
+        return (f"{GATE_HINT} If the last unit of work (\"{state.last_unit['agreement']}\") was closed before it "
+                "was finished: /collab:resume.")
+    return GATE_HINT
 
 
 def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | None:
@@ -685,17 +726,17 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if state.stage != "off" and tool in SHELL_TOOLS:
         denied = _git_denied(tool, tool_input.get("command") or "", state, env)
         if denied:
-            return _deny(f"{GIT_MESSAGE} (detected: {denied})")
+            return _deny(f"{GIT_MESSAGE} (detected: {denied})", GIT_HINT)
     skip_git = bool(state.git_grant)  # the developer's permission also covers staging etc. for it
 
     if state.stage in OPEN_STAGES and state.paused:
         if tool in write_tools and _is_inside(_tool_path(tool_input), env.project_dir):
-            return _deny(PAUSED_MESSAGE)
+            return _deny(PAUSED_MESSAGE, PAUSED_HINT)
         if tool in SHELL_TOOLS:
             reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
-            return _deny(f"{PAUSED_MESSAGE} (detected: {reason})") if reason else None
+            return _deny(f"{PAUSED_MESSAGE} (detected: {reason})", PAUSED_HINT) if reason else None
         if tool == "TaskUpdate" and tool_input.get("status") in ("in_progress", "completed"):
-            return _deny(PAUSED_MESSAGE)
+            return _deny(PAUSED_MESSAGE, PAUSED_HINT)
         return None
     if state.stage in OPEN_STAGES and tool in SHELL_TOOLS:
         cwd = Path(event.get("cwd") or env.project_dir)
@@ -707,11 +748,11 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
         path = _tool_path(tool_input)
         if path and not _is_inside(path, env.project_dir):
             return None  # notes, memory, scratchpad — outside the code under discussion
-        return _deny(GATE_MESSAGE)
+        return _deny(GATE_MESSAGE, _gate_hint(state))
     if tool in SHELL_TOOLS:
         reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
         if reason:
-            return _deny(f"{GATE_MESSAGE} (detected: {reason})")
+            return _deny(f"{GATE_MESSAGE} (detected: {reason})", _gate_hint(state))
     return None
 
 
@@ -839,7 +880,7 @@ def _review_problems(event: dict, state: SessionState, env: Env, message: str) -
     problems = []
     if not re.search(env.config["verification_heading_pattern"], message, re.M):
         problems.append(
-            "collab: the final review has no \"### Verification\" section. Add it: which tests and "
+            "collab: the final review has no \"### Verification\" section (heading literally in English). Add it: which tests and "
             "checks were actually run and with what result, what remains unverified. "
             "If tests were not run, say so."
         )
@@ -882,8 +923,9 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
         problems = [] if retrying else _review_problems(event, state, env, message)
         if problems:
             return _block("\n\n".join(problems), "Stop")
+        agreement = state.agreement
         state.close_unit()
-        return {"systemMessage": "collab: unit of work closed. The next task will start with a discussion of the approach."}
+        return {"systemMessage": _closed_message(agreement)}
 
     if state.planned and state.paused:  # a pause in the plan is a valid stop once the stage is explained
         missing = [] if retrying else _stage_unexplained(event, state, env, message)
@@ -899,11 +941,18 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     if state.changes == 0 or retrying or _ends_with_question(message):
         return None
     return _block(
-        f"collab: {state.changes} file(s)/command(s) changed in this unit of work, but there is no final review. "
-        "If the work is finished, give a \"## Final review\" per the rules (with a \"### Verification\" section). "
-        "If not, continue, or end the message with a question to the developer.",
+        f"collab: {state.changes} file(s)/command(s) changed in this unit of work and there is no final review. "
+        "Do not close the unit early: first check the agreement point by point. If anything it covers is not done "
+        "yet, continue with it, or end your reply with a question to the developer. Only when all of it is done, "
+        f"give the final review: {REVIEW_HEADINGS}",
         "Stop",
     )
+
+
+def _closed_message(agreement: str) -> str:
+    what = f" (\"{agreement}\")" if agreement else ""
+    return (f"collab: unit of work closed{what}. Writing is blocked again until a new agreement. "
+            "If the work is not finished, run /collab:resume to reopen it with the same agreement.")
 
 
 # --------------------------------------------------------------------------- #

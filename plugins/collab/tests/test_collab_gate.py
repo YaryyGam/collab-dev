@@ -503,6 +503,103 @@ class GitGate(GateTestCase):
         self.assertDenied(state, "git commit -m x")
 
 
+class ReportedCases(GateTestCase):
+    """Cases from a real session report (0.2.0, Ukrainian, multi-step test fixing): the unit closed early and
+    silently, a Ukrainian summary heading wasn't recognized, a "yes" in chat didn't open writes and only
+    Claude was told which command was needed."""
+
+    AGREEMENT = "fix the three failing tests in test_api.py and set up the CI workflow for them"
+    REVIEW_UK = "## Final review\nВиправлено три тести.\n### Explanation by file\n#### a.py\nx\n### Verification\nТести пройшли."
+
+    def stop(self, state, message, active=False):
+        return g.decide_stop({"last_assistant_message": message, "stop_hook_active": active}, state, self.env)
+
+    def agreed(self):
+        state = g.SessionState()
+        self.command(state, "collab:agree", self.AGREEMENT)
+        g.decide_post_tool_use({"tool_name": "Edit", "tool_input": {"file_path": str(self.project / "a.py")},
+                                "tool_use_id": "e1"}, state, self.env)
+        return state
+
+    # 1. closed early and silently
+    def test_mid_work_stop_is_told_to_check_the_agreement_before_a_review(self):
+        out = self.stop(self.agreed(), "Fixed two of the tests.")
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("point by point", out["reason"])
+        self.assertIn("continue", out["reason"])
+
+    def test_closing_is_visible_to_the_developer_and_can_be_undone(self):
+        state = self.agreed()
+        out = self.stop(state, self.REVIEW_UK)
+        self.assertEqual(state.stage, "discussing")
+        self.assertIn(self.AGREEMENT, out["systemMessage"])
+        self.assertIn("/collab:resume", out["systemMessage"])
+        out, journal = self.command(state, "collab:resume")
+        self.assertEqual((state.stage, state.agreement), ("agreed", self.AGREEMENT))
+        self.assertIn("not done yet", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(journal, [("resume", self.AGREEMENT)])
+        self.assertIsNone(self.pre(state, "Edit", file_path=str(self.project / "b.py")))  # the agreed next step runs
+
+    def test_block_right_after_a_close_points_the_developer_to_resume(self):
+        state = self.agreed()
+        self.stop(state, self.REVIEW_UK)
+        hint = self.pre(state, "Edit", file_path=str(self.project / "b.py"))["systemMessage"]
+        self.assertIn("/collab:resume", hint)
+        self.assertIn(self.AGREEMENT, hint)
+        self.assertNotIn("/collab:resume", self.pre(g.SessionState(), "Edit", file_path=str(self.project / "b.py"))["systemMessage"])
+
+    def test_resume_after_done_and_its_refusals(self):
+        state = self.agreed()
+        self.command(state, "collab:done")
+        self.command(state, "collab:resume")
+        self.assertEqual(state.stage, "agreed")
+        out, _ = self.command(state, "collab:resume")  # already open
+        self.assertEqual(out["decision"], "block")
+        out, _ = self.command(g.SessionState(), "collab:resume")  # nothing was closed
+        self.assertEqual(out["decision"], "block")
+        out, _ = self.command(g.SessionState(stage="off"), "collab:resume")
+        self.assertEqual(out["decision"], "block")
+
+    def test_skipped_unit_resumes_as_skipped(self):
+        state = g.SessionState()
+        self.command(state, "collab:skip")
+        state.close_unit()
+        self.command(state, "collab:resume")
+        self.assertEqual((state.stage, state.agreement), ("skipped", ""))
+
+    # 2. heading language
+    def test_review_headings_in_any_conversation_language(self):
+        for heading in ("## Final review", "## Итоговый разбор", "## Итоговый обзор", "## Підсумковий розбір"):
+            with self.subTest(heading=heading):
+                state = self.agreed()
+                self.stop(state, self.REVIEW_UK.replace("## Final review", heading))
+                self.assertEqual(state.stage, "discussing")
+
+    def test_a_loose_summary_heading_does_not_close_and_the_literal_heading_is_named(self):
+        state = self.agreed()
+        out = self.stop(state, "## Підсумок\nЗроблено.")  # what Claude wrote in the reported session
+        self.assertEqual(state.stage, "agreed")
+        self.assertIn('literally as "## Final review"', out["reason"])
+        self.assertNotIn("Итоговый", out["reason"])  # the 0.2.0 message pushed a Russian heading
+
+    # 3. agreement needs the developer's command, and the developer is told so
+    def test_a_yes_in_chat_does_not_open_writes(self):
+        state = g.SessionState()
+        g.decide_user_prompt({"prompt": "так, давай"}, state, self.env)
+        self.assertEqual(self.decision(self.pre(state, "Edit", file_path=str(self.project / "a.py"))), "deny")
+
+    def test_blocked_write_tells_the_developer_which_command_to_type(self):
+        for tool, kwargs in (("Edit", {"file_path": str(self.project / "a.py")}), ("Bash", {"command": "rm a.py"})):
+            with self.subTest(tool=tool):
+                out = self.pre(g.SessionState(), tool, **kwargs)
+                self.assertIn("/collab:agree", out["systemMessage"])
+        paused = g.SessionState(stage="agreed", planned=True, paused=True)
+        self.assertIn("reply to Claude", self.pre(paused, "Edit", file_path=str(self.project / "a.py"))["systemMessage"])
+        self.assertIn("/collab:commit", self.pre(g.SessionState(stage="agreed"), "Bash", command="git commit -m x")["systemMessage"])
+        # the plugin's own state files: no hint, nothing for the developer to type
+        self.assertNotIn("systemMessage", self.pre(g.SessionState(), "Write", file_path=str(self.env.data_dir / "s.json")))
+
+
 class ReviewerNotes(GateTestCase):
     """/collab:note: the hook writes the developer's rule word for word; Claude can read the file, never change it."""
 

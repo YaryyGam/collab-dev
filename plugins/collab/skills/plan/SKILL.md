@@ -10,8 +10,8 @@ The developer has confirmed the approach for the current unit of work and asked 
 > $ARGUMENTS
 
 1. Check this restatement against what was discussed. If it diverges from what was agreed or misses something significant (a constraint, a risk, an accepted trade-off), point it out briefly and specifically. If it is accurate, confirm it in one sentence without perfunctory praise.
-2. Split the work into 2–6 stages. A stage is a coherent step the developer can review on its own as a diff (for example "data model", "endpoint", "tests"), not a single line and not the whole task. Create each stage as a task with `TaskCreate`: `subject` is what the stage achieves, `description` lists the files it touches and what changes in them.
-3. Show the plan in your reply (stages in order, files of each) and end with a question whether to start. Do not write code now: the plugin blocks changes until the developer replies.
+2. Split the work into 2–6 stages. A stage is a coherent step the developer can review on its own as a diff (for example "data model", "endpoint", "tests"), not a single line and not the whole task. Create each stage as a task with `TaskCreate`, in English whatever the conversation language: `subject` is what the stage achieves, `description` lists the files it touches and what changes in them.
+3. Show the plan in your reply, in the developer's language (stages in order, files of each) and end with a question whether to start. Do not write code now: the plugin blocks changes until the developer replies.
 
 Then, for each stage, after the developer's go-ahead:
 
