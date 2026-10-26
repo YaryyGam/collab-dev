@@ -600,6 +600,43 @@ class ReportedCases(GateTestCase):
         self.assertNotIn("systemMessage", self.pre(g.SessionState(), "Write", file_path=str(self.env.data_dir / "s.json")))
 
 
+class ProjectMap(GateTestCase):
+    """/collab:map: Claude writes .collab/project-map.md in any stage; it is not a code change; new sessions learn of it."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = str(self.project / ".collab" / "project-map.md")
+
+    def test_map_is_writable_in_every_stage_and_not_tracked(self):
+        for state in (g.SessionState(), g.SessionState(stage="agreed", planned=True, paused=True)):
+            with self.subTest(stage=state.stage):
+                self.assertIsNone(self.pre(state, "Write", file_path=self.path))
+        state = g.SessionState(stage="agreed")
+        out = g.decide_post_tool_use({"tool_name": "Write", "tool_input": {"file_path": self.path}}, state, self.env)
+        self.assertIsNone(out)
+        self.assertEqual(state.changes, 0)  # no "explain this file", no review demanded for it
+
+    def test_map_command_excludes_the_file_from_git(self):
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        out = g.run("user-prompt-expansion", {"session_id": "s", "command_name": "collab:map", "command_args": ""}, self.env)
+        self.assertIn(".collab/project-map.md", out["hookSpecificOutput"]["additionalContext"])
+        exclude = (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+        self.assertIn("/.collab/project-map.md", exclude.splitlines())
+
+    def test_map_command_works_when_off(self):
+        out, journal = self.command(g.SessionState(stage="off"), "collab:map", "payments")
+        self.assertNotIn("decision", out)
+        self.assertEqual(journal, [("map", "payments")])
+
+    def test_new_session_is_pointed_to_an_existing_map(self):
+        out, _ = g.decide_session_start({"source": "startup"}, None, self.env)
+        self.assertNotIn("project-map.md", out["hookSpecificOutput"]["additionalContext"])
+        Path(self.path).parent.mkdir(parents=True)
+        Path(self.path).write_text("# Project map\n", encoding="utf-8")
+        out, _ = g.decide_session_start({"source": "startup"}, None, self.env)
+        self.assertIn(".collab/project-map.md", out["hookSpecificOutput"]["additionalContext"])
+
+
 class ReviewerNotes(GateTestCase):
     """/collab:note: the hook writes the developer's rule word for word; Claude can read the file, never change it."""
 

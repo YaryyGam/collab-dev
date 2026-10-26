@@ -166,6 +166,25 @@ def notes_file(env: Env) -> Path:
     return env.project_dir / NOTES_PATH
 
 
+# /collab:map: Claude's analysis of the whole project, read by later sessions instead of re-exploring
+MAP_PATH = Path(".collab") / "project-map.md"
+
+
+def map_file(env: Env) -> Path:
+    return env.project_dir / MAP_PATH
+
+
+def _map_pointer(env: Env) -> str:
+    """A line for the session start when the project map exists, so a new session uses it."""
+    path = map_file(env)
+    if not path.exists():
+        return ""
+    made = time.strftime("%Y-%m-%d", time.localtime(path.stat().st_mtime))
+    return (f"\n\nProject map: {MAP_PATH.as_posix()} (generated {made} by /collab:map) describes this project: "
+            "stack, architecture, endpoints, data, flows, file relations. Read it before exploring the codebase "
+            "from scratch; trust the code where they disagree, and suggest re-running /collab:map if it looks stale.")
+
+
 def write_reviewer_note(env: Env, text: str) -> bool:
     """Append the developer's rule word for word and keep the file out of git via .git/info/exclude.
     Returns False when the file could not be excluded (not a git repository)."""
@@ -175,6 +194,11 @@ def write_reviewer_note(env: Env, text: str) -> bool:
         if f.tell() == 0:
             f.write(NOTES_HEADER)
         f.write(f"- {time.strftime('%Y-%m-%d')}: {text}\n")
+    return exclude_from_git(env, NOTES_PATH)
+
+
+def exclude_from_git(env: Env, rel_path: Path) -> bool:
+    """Add /<rel_path> to .git/info/exclude (local, nothing to commit). False when not a git repository."""
     try:  # --git-path also finds info/exclude in a worktree, where .git is a file
         out = subprocess.run(["git", "-C", str(env.project_dir), "rev-parse", "--git-path", "info/exclude"],
                              capture_output=True, text=True, timeout=5)
@@ -184,7 +208,7 @@ def write_reviewer_note(env: Env, text: str) -> bool:
         return False
     exclude = Path(out.stdout.strip())
     exclude = exclude if exclude.is_absolute() else env.project_dir / exclude
-    entry = "/" + NOTES_PATH.as_posix()
+    entry = "/" + rel_path.as_posix()
     existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     if entry not in existing.splitlines():
         exclude.parent.mkdir(parents=True, exist_ok=True)
@@ -574,7 +598,7 @@ def decide_session_start(event: dict, state: SessionState | None, env: Env) -> t
     # resume/compact keep the unit in progress; a new or cleared conversation starts fresh
     if state is None or event.get("source") in ("startup", "clear"):
         state = SessionState(mode=env.default_mode)
-    text = mode_rules(env, state.mode) + "\n\n" + status_line(state)
+    text = mode_rules(env, state.mode) + "\n\n" + status_line(state) + _map_pointer(env)
     return _context("SessionStart", text), state
 
 
@@ -616,6 +640,11 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
         else:
             note += "Then implement, explaining decisions along the way."
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [(name, args)]
+
+    if name == "map":  # works in every stage: it writes only .collab/project-map.md, never code
+        note = (f"The developer asked for a project map. Write it to {MAP_PATH.as_posix()} (writable in every stage, "
+                "kept out of git). Follow the command's instructions.")
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("map", args)]
 
     if name == "note":
         if not args:
@@ -722,6 +751,9 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     command = tool_input.get("command") or ""
     if tool in SHELL_TOOLS and NOTES_PATH.name in command and shell_write_reason(tool, command, env.config):
         return _deny(NOTES_PROTECT_MESSAGE)
+    # the project map is documentation, not code under discussion: writable in every stage
+    if tool in write_tools and _is_inside(_tool_path(tool_input), map_file(env)):
+        return None
 
     if state.stage != "off" and tool in SHELL_TOOLS:
         denied = _git_denied(tool, tool_input.get("command") or "", state, env)
@@ -801,6 +833,8 @@ def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | N
         return {"decision": "block", "reason": _stage_done_message(state, env)}
     if tool in env.config["write_tools"]:
         path = _tool_path(tool_input)
+        if path and _is_inside(path, map_file(env)):
+            return None  # the project map is not a code change: no tracking, no explanation needed
         if path and _is_inside(path, env.project_dir) and path not in state.stage_anchors:
             state.stage_anchors[path] = event.get("tool_use_id") or ""
         if path and _is_inside(path, env.project_dir) and path not in state.changed_files:
@@ -980,6 +1014,10 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
             if kind == "note" and not write_reviewer_note(env, detail):
                 out["hookSpecificOutput"]["additionalContext"] += (
                     "\nThe project is not a git repository, so the notes file could not be excluded from git: "
+                    "tell the developer.")
+            if kind == "map" and not exclude_from_git(env, MAP_PATH):
+                out["hookSpecificOutput"]["additionalContext"] += (
+                    "\nThe project is not a git repository, so the map could not be excluded from git: "
                     "tell the developer.")
     elif event_name == "pre-tool-use":
         return decide_pre_tool_use(event, state, env)  # read-only: no save

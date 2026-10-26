@@ -150,6 +150,7 @@ All commands are invoked **by a human only**: Claude cannot run them itself (`di
 | `/collab:skip [reason]` | Skips the approach discussion **for one unit of work**. Explanations along the way and the final review remain. The reason is optional; if given, it shows in the status | `/collab:skip standard CRUD following the orders pattern` |
 | `/collab:off [reason]` | **Classic Claude Code for the rest of the session**: no blocking and no process. A new session starts in collaborative mode again | `/collab:off prod is on fire, hotfix` |
 | `/collab:on` | Turns collaborative development back on in the current session | |
+| `/collab:map [focus]` | **Reverse-engineers the whole project into one file**, `.collab/project-map.md`: what it is, stack with versions, architecture and flow diagrams (Mermaid), every endpoint with its handler, databases and how they connect (sync/async and why), data model, domain logic per module, integrations and background work, module dependencies, config, tests/CI, risks, and where a newcomer should start. Every fact links to `file:line`. Small projects are analyzed by Claude alone, larger ones by 3–5 parallel read-only `collab:analyst` agents. Works in any stage, the file stays out of git (`.git/info/exclude`), and every new session is pointed to it so you don't have to explain the project again | `/collab:map` or `/collab:map payments` |
 | `/collab:done` | Closes the current unit of work manually; the next task starts with a new agreement | |
 | `/collab:resume` | Reopens the **last closed** unit of work with the same agreement, for when Claude gave the final review (or you ran `/collab:done`) before everything agreed was done. No new restatement needed. When a unit closes, the plugin tells you so and names this command | `/collab:resume` |
 | `/collab:mode <mode>` | Changes the mode for the rest of the session: `learning`, `collaborative`, `review` | `/collab:mode learning` |
@@ -296,7 +297,8 @@ The 12 scenarios from the spec live in [`plugins/collab/evals/`](plugins/collab/
 │   ├── output-styles/collab.md         # ⭐ CORE PROCESS RULES (enabled automatically)
 │   ├── modes/                          # learning / collaborative / review: mode differences
 │   ├── agents/reviewer.md              # read-only reviewer behind /collab:review
-│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, note, explain, skip, off, on, done, resume, mode, status
+│   ├── agents/analyst.md               # read-only analysts behind /collab:map
+│   ├── skills/                         # commands /collab:agree, plan, commit, push, git, review, note, map, explain, skip, off, on, done, resume, mode, status
 │   ├── hooks/hooks.json                # which events invoke the script
 │   ├── scripts/run_hook.sh             # hook launcher: finds python3 / python / py -3
 │   ├── scripts/collab_gate.py          # hard logic: blocking, stages, review check
