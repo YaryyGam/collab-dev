@@ -19,8 +19,10 @@ The goal: one file that explains the project completely, so neither the develope
 
 ## 2. Decide how to analyze
 
-- **Small project**: analyze it yourself. Small means one service and either up to roughly 80 source files or up to a few thousand lines of source code (count with `git ls-files | xargs wc -l`, leaving out lockfiles and generated or vendored code). Many tiny files are still a small project.
-- **Larger** (more files *and* more code than that, or several services): launch `collab:analyst` agents **in parallel** (several Agent calls in one message, `subagent_type: "collab:analyst"`), one per area, 3–5 in total:
+Decide by **lines of source code**, not by the number of files: count them with `git ls-files | xargs wc -l`, leaving out lockfiles, generated and vendored code, fixtures and data files.
+
+- **Up to about 5,000 lines**: analyze it yourself.
+- **More than that**: launch `collab:analyst` agents **in parallel** (several Agent calls in one message, `subagent_type: "collab:analyst"`), one per area, 3–5 in total:
   1. stack, infrastructure, config, tests and CI;
   2. entry points and API;
   3. data layer;
