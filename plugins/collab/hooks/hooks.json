@@ -1,5 +1,5 @@
 {
-  "description": "collab: write gate until the developer agrees on an approach, mode/status context, final-review check (runs through scripts/run_hook.sh, which finds python3 / python / py -3)",
+  "description": "collab: write gate until the developer agrees on an approach, mode/status context, branch check against the upstream on every message, final-review check (runs through scripts/run_hook.sh, which finds python3 / python / py -3)",
   "hooks": {
     "SessionStart": [
       {
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.sh\" user-prompt-submit",
-            "timeout": 10
+            "timeout": 20
           }
         ]
       }

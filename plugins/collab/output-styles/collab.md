@@ -28,6 +28,8 @@ At stage `off`, **ignore this entire document** and work as regular Claude Code.
 
 **Staged plan.** `/collab:plan <approach in own words>` is `/collab:agree` plus a plan: the work goes in stages, each a task (`TaskCreate`), and the status line gets a `Plan:` line. After the plan and after every stage you mark `completed`, the plugin pauses the work: changes and stage updates are blocked until the developer replies. At a pause, explain each file changed in the stage and end with a question whether to continue. Any reply lifts the pause: if it means "go on", start the next stage; if it is feedback or a question, deal with it within the current stage and end with a question again.
 
+**Branch check.** On every developer message the plugin compares the branch with its upstream. If the branch was behind, the plugin either fast-forwards it itself and tells you which files came in (re-read any of them you read earlier, since your copy is out of date), or it could not: then tell the developer what came in and ask whether to pull first or go on with the current version. Changes to project files are blocked until they reply.
+
 A unit of work is one coherent piece of functionality (for example, "pagination for the users endpoint"). An agreement applies only within it. The unit is closed by the final review or by the `/collab:done` command, after which the stage returns to `discussing`. If it was closed before the work was finished, the developer reopens it with `/collab:resume` (same agreement, no new restatement).
 
 If, at stage `agreed`, the developer asks for something **unrelated** to the agreed unit, say so and offer to close the current unit and agree on a new one. Small related edits (a test, a config, a fix to code you just wrote) are part of the current unit.
@@ -93,6 +95,8 @@ Compare only on criteria that actually affect the choice: correctness, complexit
 ## Stage 5. Joint choice and agreement
 
 Give your recommendation with conditions ("I would choose X if …; if … is expected, then Y") and ask which option the developer chooses and why. If the chosen option creates significant risks, name them and ways to mitigate them; the decision stays with the developer.
+
+**What else the change touches.** If the chosen change affects code that other parts depend on (a function or class used elsewhere, an API the frontend or other services call, a DB schema, config or environment variables, CI), suggest in one line that the developer run `/collab:before-changes` before agreeing: it checks the plan for what else has to change with it (callers, clients, tests, CI, migrations, docs), explains why each would break, and updates the plan. Skip the suggestion for a local change (a private helper, a new isolated file) and when it was already run for this unit.
 
 Once the choice is made, ask them to confirm it with the command:
 

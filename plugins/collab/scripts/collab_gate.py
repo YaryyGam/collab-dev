@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -79,6 +80,15 @@ SELF_PROTECT_MESSAGE = (
     "collab: only the developer may change the plugin's state files, through the /collab:* "
     "commands. Do not modify them."
 )
+BRANCH_MESSAGE = (
+    "collab: the branch is behind its upstream and the developer has not said yet whether to update it, so "
+    "changes to project files are blocked. Tell them what came in and ask whether to pull first or go on with "
+    "the current version; their reply lifts the block."
+)
+BRANCH_HINT = ("collab: your branch is behind its upstream: tell Claude whether to pull first "
+               "or go on with the current version.")
+# Prompts that start changes: the branch check fetches for them even if it fetched a moment ago.
+CHANGE_START_COMMANDS = ("/collab:agree", "/collab:plan", "/collab:skip", "/collab:resume", "/collab:before-changes")
 
 
 # --------------------------------------------------------------------------- #
@@ -114,6 +124,11 @@ class SessionState:
     git_grant: dict = field(default_factory=dict)
     # the unit the last review or /collab:done closed, so /collab:resume can reopen it
     last_unit: dict = field(default_factory=dict)
+    # branch check (session-wide, outlives units): when the upstream was last fetched; the upstream commit
+    # the developer is being asked about (project changes wait for their reply); the last one they answered
+    branch_fetched_at: float = 0.0
+    branch_pending: str = ""
+    branch_seen: str = ""
 
     @property
     def changes(self) -> int:
@@ -270,6 +285,8 @@ def status_line(state: SessionState) -> str:
     if state.planned and state.stage in OPEN_STAGES:
         line += ("\nPlan: paused, waiting for the developer's reply (changes and stage updates blocked)." if state.paused
                  else "\nPlan: a stage is in progress; marking it completed pauses the work until the developer replies.")
+    if state.branch_pending and state.stage in OPEN_STAGES:
+        line += "\nBranch: behind its upstream; changes to project files wait for the developer to say whether to pull first."
     return line
 
 
@@ -532,6 +549,194 @@ def shell_content_write_reason(tool: str, command: str, cwd: Path, env: Env) -> 
 
 
 # --------------------------------------------------------------------------- #
+# Branch check: before the developer's turn, is the branch behind its upstream?
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class Branch:
+    """The current branch against its upstream, as the last fetch saw it."""
+
+    name: str
+    upstream: str  # origin/main
+    remote: str  # origin; "." when the upstream is a local branch
+    remote_ref: str  # refs/heads/main on the remote
+    upstream_sha: str = ""
+    ahead: int = 0
+    behind: int = 0
+    commits: list = field(default_factory=list)  # "<hash> <subject>" of the incoming commits, newest first
+    files: list = field(default_factory=list)  # files the incoming commits change
+    overlap: list = field(default_factory=list)  # of those, files with uncommitted local changes
+
+
+def _git(env: Env, *args: str, timeout: float = 5.0) -> tuple[bool, str]:
+    """Run git in the project: (succeeded, stdout, or stderr when it failed). Never waits for a password:
+    no terminal prompts, and on POSIX its own session, so ssh finds no terminal to ask on and fails instead
+    of hanging the hook; on a timeout the whole process group (ssh included) is killed."""
+    child_env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GIT_OPTIONAL_LOCKS="0")
+    try:
+        proc = subprocess.Popen(["git", "-C", str(env.project_dir), *args], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child_env,
+                                start_new_session=os.name != "nt")
+    except OSError as exc:
+        return False, str(exc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:  # the whole tree: git's helpers (ssh, git-remote-https) hold the pipes open too
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=5)
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        return False, f"git took longer than {timeout:g} s"
+    ok = proc.returncode == 0
+    return ok, (out if ok else err).decode("utf-8", errors="replace")
+
+
+def current_branch(env: Env) -> Branch | None:
+    """The checked-out branch and its upstream; None when HEAD is detached, the branch has no upstream,
+    or the project is not a git repository."""
+    ok, ref = _git(env, "symbolic-ref", "--quiet", "HEAD")
+    if not ok:
+        return None
+    ok, info = _git(env, "for-each-ref", "--format=%(upstream:short)%00%(upstream:remotename)%00%(upstream:remoteref)",
+                    ref.strip())
+    parts = info.strip().split("\0")
+    if not ok or len(parts) != 3 or not parts[0]:
+        return None
+    return Branch(name=ref.strip().removeprefix("refs/heads/"), upstream=parts[0], remote=parts[1], remote_ref=parts[2])
+
+
+def fetch_upstream(env: Env, branch: Branch, timeout: float) -> bool:
+    """Update the remote-tracking ref of the upstream only (not every branch of the remote, not tags).
+    Changes nothing the developer works with: no working tree, no local branch."""
+    if branch.remote in ("", "."):
+        return True
+    ok, _ = _git(env, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", branch.remote, branch.remote_ref,
+                 timeout=timeout)
+    return ok
+
+
+def compare_with_upstream(env: Env, branch: Branch, max_listed: int) -> bool:
+    """Fill in how far the branch is from its upstream and, when behind, what is coming in and which incoming
+    files also have uncommitted local changes. False when git can't tell (for example, the upstream is gone)."""
+    ok, counts = _git(env, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+    try:
+        branch.ahead, branch.behind = (int(n) for n in counts.split()) if ok else (0, 0)
+    except ValueError:
+        return False
+    if not ok or not branch.behind:
+        return ok
+    branch.upstream_sha = _git(env, "rev-parse", "@{upstream}")[1].strip()
+    branch.commits = _git(env, "log", f"-n{max_listed}", "--format=%h %s", "HEAD..@{upstream}")[1].splitlines()
+    # three dots: what the upstream changed since the branches parted, not the local side's changes
+    branch.files = [f for f in _git(env, "diff", "--name-only", "-z", "HEAD...@{upstream}")[1].split("\0") if f]
+    entries = _git(env, "status", "--porcelain", "-z")[1].split("\0")
+    local, skip = set(), False
+    for entry in entries:  # "XY path"; a rename or copy is followed by its old path as a separate entry
+        if skip or len(entry) < 4:
+            skip = False
+            continue
+        local.add(entry[3:])
+        skip = entry[0] in "RC"
+    branch.overlap = [f for f in branch.files if f in local]
+    return True
+
+
+def fast_forward(env: Env) -> str:
+    """Move the branch up to its upstream with `git merge --ff-only`: no merge commit, nothing rewritten, and git
+    refuses rather than touch uncommitted changes. The repository's own git hooks (post-merge) are not run, so a
+    slow one can't outlive the hook's time limit halfway. Returns "" on success, else git's reason."""
+    ok, err = _git(env, "-c", f"core.hooksPath={os.devnull}", "merge", "--ff-only", "--quiet", "@{upstream}",
+                   timeout=10)
+    return "" if ok else (err.strip().splitlines() or ["unknown error"])[0]
+
+
+def _listed(items: list, limit: int = 15) -> str:
+    if not items:
+        return "none"
+    more = f" and {len(items) - limit} more" if len(items) > limit else ""
+    return ", ".join(items[:limit]) + more
+
+
+def _incoming(branch: Branch) -> str:
+    more = branch.behind - len(branch.commits)
+    lines = [f"  {c}" for c in branch.commits] + ([f"  … and {more} more"] if more > 0 else [])
+    return "Incoming commits:\n" + "\n".join(lines) + f"\nFiles they change: {_listed(branch.files)}"
+
+
+def _not_pulled(branch: Branch, auto_pull: bool, error: str) -> tuple[str, str]:
+    """Why the branch was not updated automatically, and how the developer could update it."""
+    if branch.ahead:
+        return (f"it also has {branch.ahead} local commit(s) that {branch.upstream} does not, so updating it "
+                "needs a merge or a rebase, which is the developer's call",
+                "`git pull --rebase` replays the local commits on top, `git pull --no-rebase` makes a merge commit")
+    if branch.overlap:
+        return (f"uncommitted local changes touch files the incoming commits change too ({_listed(branch.overlap)})",
+                "commit or stash the local changes first: `git stash`, `git pull --ff-only`, `git stash pop`")
+    if not auto_pull:
+        return "automatic updates are off (branch_check.auto_pull in gate.json)", "`git pull --ff-only`"
+    return f"git refused the fast-forward: {error}", "`git pull --ff-only` once that is sorted out"
+
+
+def check_branch(event: dict, state: SessionState, env: Env) -> tuple[str, str]:
+    """On the developer's message: is the branch behind its upstream? Returns (context for Claude, notice for the
+    developer), both empty when there is nothing to say. Fetches at most every fetch_interval_seconds, and always
+    for a command that starts changes. Fast-forwards when it safely can; otherwise asks Claude to ask the developer
+    and holds project changes until they reply, once per upstream commit."""
+    if state.branch_pending:  # this message is the developer's reply: they know about those commits now
+        state.branch_seen, state.branch_pending = state.branch_pending, ""
+    cfg = env.config.get("branch_check") or {}
+    if not cfg.get("enabled", True) or state.stage == "off":
+        return "", ""
+    branch = current_branch(env)
+    if branch is None:
+        return "", ""
+    now = time.time()
+    starts_changes = (event.get("prompt") or "").lstrip().startswith(CHANGE_START_COMMANDS)
+    if starts_changes or now - state.branch_fetched_at >= cfg.get("fetch_interval_seconds", 300):
+        state.branch_fetched_at = now  # a failed fetch (offline) also waits for the interval: no retry per message
+        fetch_upstream(env, branch, cfg.get("fetch_timeout_seconds", 5))
+    if not compare_with_upstream(env, branch, cfg.get("max_listed", 10)) or not branch.behind:
+        return "", ""
+
+    auto_pull = cfg.get("auto_pull", True)
+    error = ""
+    if auto_pull and not branch.ahead and not branch.overlap:
+        error = fast_forward(env)
+        if not error:
+            return (
+                f"collab: the branch {branch.name} was {branch.behind} commit(s) behind {branch.upstream}; before this "
+                "message the plugin brought it up to date with a fast-forward (git merge --ff-only: no merge commit, "
+                f"uncommitted changes kept).\n{_incoming(branch)}\n"
+                "If you read any of these files earlier in this session, read them again before relying on them or "
+                "changing them: your copy is out of date. If they change dependencies, migrations or generated code, "
+                "tell the developer what may need to be run. Mention the update to the developer in one line.",
+                f"collab: pulled {branch.behind} new commit(s) from {branch.upstream} into {branch.name} (fast-forward).",
+            )
+    if branch.upstream_sha == state.branch_seen:
+        return "", ""  # the developer already answered about exactly these commits
+    state.branch_pending = branch.upstream_sha
+    reason, how = _not_pulled(branch, auto_pull, error)
+    discussing = (" While the approach is not agreed, the plugin blocks git pull for Claude: the developer can run "
+                  "it themselves with `! <command>`." if state.stage == "discussing" else "")
+    return (
+        f"collab: the branch {branch.name} is {branch.behind} commit(s) behind {branch.upstream}, so the local code "
+        f"is out of date. It was not updated automatically: {reason}.\n{_incoming(branch)}\n"
+        "Before changing any project files, tell the developer what came in and ask whether to update the branch "
+        f"first ({how}) or go on with the current version. Changes to project files are blocked until they reply."
+        + discussing,
+        f"collab: {branch.name} is {branch.behind} commit(s) behind {branch.upstream} and was not updated "
+        "automatically. Claude will ask you whether to pull first.",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Event handlers
 # --------------------------------------------------------------------------- #
 
@@ -645,6 +850,11 @@ def decide_command(event: dict, state: SessionState, env: Env) -> tuple[dict | N
         note = (f"The developer asked for a project map. Write it to {MAP_PATH.as_posix()} (writable in every stage, "
                 "kept out of git). Follow the command's instructions.")
         return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("map", args)]
+
+    if name == "before-changes":  # analysis in every stage: the stage and the gate stay as they are
+        note = ("The developer asked what the planned change could break, before it is made. This is analysis: do not "
+                "change project files while doing it. Follow the command's instructions.")
+        return _context("UserPromptExpansion", note + "\n\n" + status_line(state)), [("before-changes", args)]
 
     if name == "note":
         if not args:
@@ -761,6 +971,10 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
             return _deny(f"{GIT_MESSAGE} (detected: {denied})", GIT_HINT)
     skip_git = bool(state.git_grant)  # the developer's permission also covers staging etc. for it
 
+    # the branch is behind its upstream and the developer has not said yet whether to pull first
+    if (state.stage in OPEN_STAGES and state.branch_pending and tool in write_tools
+            and _is_inside(_tool_path(tool_input), env.project_dir)):
+        return _deny(BRANCH_MESSAGE, BRANCH_HINT)
     if state.stage in OPEN_STAGES and state.paused:
         if tool in write_tools and _is_inside(_tool_path(tool_input), env.project_dir):
             return _deny(PAUSED_MESSAGE, PAUSED_HINT)
@@ -1006,7 +1220,14 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
         state = SessionState(mode=env.default_mode)
 
     if event_name == "user-prompt-submit":
+        # first, so the status line below already shows a branch question raised by this message
+        context, notice = check_branch(event, state, env)
         out = decide_user_prompt(event, state, env)
+        if context:
+            out = out or _context("UserPromptSubmit", "")
+            extra = out["hookSpecificOutput"]
+            extra["additionalContext"] = (extra["additionalContext"] + "\n\n" + context).strip()
+            out["systemMessage"] = notice
     elif event_name == "user-prompt-expansion":
         out, journal = decide_command(event, state, env)
         for kind, detail in journal:

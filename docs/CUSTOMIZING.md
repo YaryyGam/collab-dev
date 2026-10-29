@@ -48,6 +48,26 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 
 `git_gated` in `config/gate.json` lists the git actions Claude may run only after `/collab:commit`, `/collab:push` or `/collab:git`: by default `commit`, `push`, `merge`, `rebase`, `cherry-pick`, `revert`, `reset`, `tag` (listing tags is always allowed). Remove an action to let Claude run it freely, add one (e.g. `pull`, `stash`) to gate it. Tests: `GitGate` in `tests/test_collab_gate.py`.
 
+### Configure the branch check
+
+`branch_check` in `config/gate.json`:
+```json
+"branch_check": {
+  "enabled": true,
+  "auto_pull": true,
+  "fetch_interval_seconds": 300,
+  "fetch_timeout_seconds": 5,
+  "max_listed": 10
+}
+```
+- `enabled: false` turns the check off.
+- `auto_pull: false` never updates the branch itself: when it is behind, Claude always asks first and project changes wait for your reply.
+- `fetch_interval_seconds`: how often a regular message fetches the upstream; `/collab:agree|plan|skip|resume|before-changes` always fetch.
+- `fetch_timeout_seconds`: after this the fetch is cut off and the check uses the last fetched state. The `UserPromptSubmit` hook timeout in `hooks/hooks.json` (20 s) must stay above it.
+- `max_listed`: how many incoming commits are listed for Claude.
+
+Tests: `BranchCheck` in `tests/test_collab_gate.py`.
+
 ### Add a command that should count as a write
 
 For example, `alembic upgrade` changes the DB schema — block it until agreement:

@@ -4,9 +4,11 @@ Run: python3 -m unittest discover -s plugins/collab/tests -v
 """
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -813,6 +815,178 @@ class SessionLifecycle(GateTestCase):
         out = g.run("pre-tool-use", {"session_id": "s", "tool_name": "Write",
                                      "tool_input": {"file_path": str(self.project / "a.py")}}, self.env)
         self.assertEqual(self.decision(out), "deny")
+
+
+class BeforeChanges(GateTestCase):
+    def test_works_in_every_stage_and_keeps_it(self):
+        for stage in ("discussing", "agreed", "off"):
+            state = g.SessionState(stage=stage)
+            with self.subTest(stage=stage):
+                out, journal = self.command(state, "collab:before-changes")
+                self.assertIn("do not change project files", out["hookSpecificOutput"]["additionalContext"])
+                self.assertEqual((state.stage, journal), (stage, [("before-changes", "")]))
+
+
+# git isolated from the machine's own config (signing, hooks, pull settings) for the test repositories and the hook
+GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+
+def git(*args):
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+class BranchCheck(GateTestCase):
+    """On every developer message the hook compares the branch with its upstream: fast-forwards it when it safely can,
+    otherwise has Claude ask the developer and holds project changes until they reply."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, GIT_ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        root = self.project.parent
+        self.remote, self.other = root / "remote.git", root / "other"
+        git("init", "-q", "--bare", "-b", "main", str(self.remote))
+        git("init", "-q", "-b", "main", str(self.other))
+        self.commit(self.other, "app.py", "v1\n", "first")
+        git("-C", str(self.other), "remote", "add", "origin", str(self.remote))
+        git("-C", str(self.other), "push", "-q", "-u", "origin", "main")
+        git("clone", "-q", str(self.remote), str(self.project))
+
+    @staticmethod
+    def commit(repo, name, text, message):
+        (repo / name).write_text(text, encoding="utf-8")
+        git("-C", str(repo), "add", name)
+        git("-C", str(repo), "commit", "-q", "-m", message)
+
+    def push_upstream(self, name="app.py", text="v2\n", message="teammate: change app"):
+        self.commit(self.other, name, text, message)
+        git("-C", str(self.other), "push", "-q")
+
+    def prompt(self, text="go on", stage="discussing"):
+        state = g.load_state(self.env, "s") or g.SessionState()
+        state.stage = stage
+        g.save_state(self.env, "s", state)
+        out = g.run("user-prompt-submit", {"session_id": "s", "prompt": text}, self.env)
+        return out or {}, g.load_state(self.env, "s")  # nothing for a /collab:* command when the branch is fine
+
+    def head(self, repo):
+        return git("-C", str(repo), "rev-parse", "HEAD")
+
+    def set_branch_check(self, **values):
+        self.env.config = {**CONFIG, "branch_check": {**CONFIG["branch_check"], **values}}
+
+    def test_an_up_to_date_branch_says_nothing(self):
+        out, state = self.prompt()
+        self.assertNotIn("systemMessage", out)
+        self.assertNotIn("behind", out["hookSpecificOutput"]["additionalContext"])
+        self.assertGreater(state.branch_fetched_at, 0)
+
+    def test_a_clean_branch_behind_is_fast_forwarded_and_claude_rereads(self):
+        self.push_upstream()
+        out, state = self.prompt()
+        self.assertEqual(self.head(self.project), self.head(self.other))
+        self.assertEqual((self.project / "app.py").read_text(encoding="utf-8"), "v2\n")
+        self.assertIn("pulled 1 new commit(s) from origin/main", out["systemMessage"])
+        context = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("teammate: change app", context)
+        self.assertIn("Files they change: app.py", context)
+        self.assertIn("read them again", context)
+        self.assertIn("stage=discussing", context)  # the status line is still there
+        self.assertEqual(state.branch_pending, "")
+
+    def test_unrelated_uncommitted_changes_are_kept(self):
+        (self.project / "notes.txt").write_text("mine\n", encoding="utf-8")
+        self.push_upstream()
+        out, _ = self.prompt()
+        self.assertIn("pulled", out["systemMessage"])
+        self.assertEqual((self.project / "notes.txt").read_text(encoding="utf-8"), "mine\n")
+
+    def test_without_auto_pull_claude_asks_and_changes_wait_for_the_reply(self):
+        self.set_branch_check(auto_pull=False)
+        self.push_upstream()
+        before = self.head(self.project)
+        out, state = self.prompt(stage="agreed")
+        self.assertEqual(self.head(self.project), before)
+        context = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("1 commit(s) behind origin/main", context)
+        self.assertIn("automatic updates are off", context)
+        self.assertIn("Branch: behind its upstream", context)  # in the status line too
+        self.assertIn("Claude will ask you", out["systemMessage"])
+
+        app = str(self.project / "app.py")
+        denied = self.pre(state, "Edit", file_path=app)
+        self.assertEqual(self.decision(denied), "deny")
+        self.assertIn("pull first", denied["systemMessage"])
+        self.assertIsNone(self.pre(state, "Write", file_path="/tmp/scratch.txt"))
+        self.assertIsNone(self.pre(state, "Bash", command="git pull --ff-only"))
+
+        out, state = self.prompt("go on with the current version", stage="agreed")  # the reply lifts the hold
+        self.assertIsNone(self.pre(state, "Edit", file_path=app))
+        self.assertNotIn("systemMessage", out)  # not asked again about the same commits
+
+        self.push_upstream("other.py", "x\n", "teammate: more")
+        out, state = self.prompt("/collab:agree keep going with the agreed approach here", stage="agreed")
+        self.assertIn("2 commit(s) behind", out["hookSpecificOutput"]["additionalContext"])  # new commits: asked again
+        self.assertEqual(self.decision(self.pre(state, "Edit", file_path=app)), "deny")
+
+    def test_a_diverged_branch_is_left_to_the_developer(self):
+        self.commit(self.project, "local.py", "x\n", "local work")
+        self.push_upstream()
+        before = self.head(self.project)
+        out, _ = self.prompt()
+        self.assertEqual(self.head(self.project), before)
+        context = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("1 local commit(s)", context)
+        self.assertIn("git pull --rebase", context)
+        self.assertIn("! <command>", context)  # in discussing, Claude itself can't pull
+
+    def test_uncommitted_changes_to_incoming_files_stop_the_fast_forward(self):
+        (self.project / "app.py").write_text("my edit\n", encoding="utf-8")
+        self.push_upstream()
+        out, _ = self.prompt()
+        context = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("uncommitted local changes touch files the incoming commits change too (app.py)", context)
+        self.assertIn("git stash", context)
+        self.assertEqual((self.project / "app.py").read_text(encoding="utf-8"), "my edit\n")
+
+    def test_fetch_waits_for_the_interval_unless_changes_start(self):
+        self.prompt()
+        self.push_upstream()
+        out, _ = self.prompt("what does app.py do?")
+        self.assertNotIn("systemMessage", out)  # fetched a moment ago: the new commit isn't seen yet
+        out, _ = self.prompt("/collab:plan edit app.py in two stages because it is small enough")
+        self.assertIn("pulled", out["systemMessage"])
+
+    def test_skipped_when_off_disabled_detached_or_without_upstream(self):
+        self.push_upstream()
+        out, _ = self.prompt(stage="off")
+        self.assertNotIn("systemMessage", out)
+        self.set_branch_check(enabled=False)
+        self.assertNotIn("systemMessage", self.prompt("/collab:agree a long enough approach to start the work")[0])
+        self.set_branch_check(enabled=True)
+        git("-C", str(self.project), "checkout", "-q", "--detach")
+        self.assertNotIn("systemMessage", self.prompt("/collab:skip")[0])
+        git("-C", str(self.project), "checkout", "-q", "-b", "local-only")
+        self.assertNotIn("systemMessage", self.prompt("/collab:skip")[0])
+
+    def test_an_unreachable_remote_is_silent(self):
+        git("-C", str(self.project), "remote", "set-url", "origin", str(self.project.parent / "missing.git"))
+        out, state = self.prompt()
+        self.assertNotIn("systemMessage", out)
+        self.assertIn("stage=discussing", out["hookSpecificOutput"]["additionalContext"])
+        self.assertGreater(state.branch_fetched_at, 0)
+
+    @unittest.skipIf(os.name == "nt", "process groups are POSIX")
+    def test_a_hanging_remote_is_cut_off_with_its_children(self):
+        git("-C", str(self.project), "config", "protocol.ext.allow", "always")
+        git("-C", str(self.project), "remote", "set-url", "origin", "ext::sleep 30")  # a fetch that never answers
+        self.set_branch_check(fetch_timeout_seconds=1)
+        started = time.monotonic()
+        out, _ = self.prompt()
+        self.assertTrue(1 <= time.monotonic() - started < 5)  # waited for the timeout, then gave up
+        self.assertNotIn("systemMessage", out)
 
 
 class FailClosed(unittest.TestCase):
