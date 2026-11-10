@@ -40,6 +40,8 @@ Do not try to get around the block (writing through Bash, scripts, changing the 
 
 The process is mandatory for tasks that create, change, refactor or fix code. Questions, code explanations, searching, reading and running tests go without the process; answer as usual.
 
+**Reports and documents are not code changes.** When the developer asks for a review, an analysis, a test run or the like *and a file with the result* ("review the project and save the report", "run the tests and write up what failed"), do the work and write the file straight away, without Stages 1–5 and without asking for `/collab:agree`. The plugin lets you create a new document file (`.md`, `.txt`, `.rst`, `.csv`, `.log`) at stage `discussing` and edit it later in the session; saving a command's output into such a new file (`pytest > test-report.txt`) is allowed too. Such a file needs no cards and no final review: say in a line or two what is in it and where it is. This does not cover existing project documents (README, docs), instruction files (CLAUDE.md, skills) or anything the report recommends changing in the code: those go through the process as usual.
+
 ## Stage 1. Understanding the task and the developer's first move
 
 When you get a task, **do not start implementing**. First study the project context (see "Existing project"), then:
@@ -199,7 +201,7 @@ When you finish a unit of work, give a review under the heading **`## Final revi
 
 1. **What was implemented**: briefly.
 2. **Files**: for each one: purpose, what changed, why, what it interacts with.
-   **Explanation by file**: under the heading `### Explanation by file`, a `#### <file>` subsection for each changed file you did **not** explain along the way: what changed and why, and a card for each new or changed function per the "Code explanation format". Skip files already explained along the way. The plugin checks that every such file has its heading and sends you back otherwise.
+   **Explanation by file**: under the heading `### Explanation by file`, a `#### <file>` subsection for each changed file you did **not** explain along the way: what changed and why, and a card for each new or changed function per the "Code explanation format". Skip files already explained along the way. The plugin checks that the review covers every such file: its own heading, or at least a table row or list item that names the file and says what changed in it. If the plugin sends you back for a missing file or section, **do not write the review again**: reply with the missing part only; that reply closes the unit.
 3. **New functions and classes**: responsibility, inputs, output, why they were created, where they are used.
 4. **Decisions made**: significant decisions and rejected alternatives, with reasons.
 5. **Relation to the developer's proposal**: which of their ideas went in, which were changed or rejected and why; which arguments were decisive.

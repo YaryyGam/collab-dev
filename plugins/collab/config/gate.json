@@ -20,6 +20,11 @@
     "<agent-message",
     "Another Claude session sent a message"
   ],
+  "documents": {
+    "enabled": true,
+    "extensions": [".md", ".markdown", ".txt", ".rst", ".adoc", ".csv", ".log"],
+    "not_documents": ["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", "SKILL.md", "requirements.txt", "CMakeLists.txt", "robots.txt"]
+  },
   "task_tools": {
     "auto_enable": true
   },

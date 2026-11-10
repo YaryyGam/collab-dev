@@ -306,10 +306,33 @@ class ExplanationByFile(GateTestCase):
         out = self.stop(self.REVIEW)
         self.assertIn("a.py, pkg/b.py", out["reason"])
 
-    def test_final_review_does_not_count_as_explanation(self):
-        review = self.REVIEW.replace("Done.", "Files: a.py and pkg/b.py were changed. " + "x" * 200)
+    def test_a_bare_list_of_files_in_the_review_is_not_an_explanation(self):
+        review = self.REVIEW.replace("Done.", "Changed files:\n- `a.py`\n- `pkg/b.py`\n\n" + "x" * 200)
         self.write_transcript([("tool", "edit_a"), ("tool", "edit_b")], [review])
-        self.assertEqual(self.stop(review)["decision"], "block")
+        out = self.stop(review)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("Do not repeat the final review", out["reason"])
+
+    def test_a_table_row_or_list_item_about_the_file_covers_it(self):
+        for files in ("| File | What changed |\n|---|---|\n| `a.py` | is_valid() returns a bool instead of raising |\n"
+                      "| `pkg/b.py` (new) | the caller now checks the returned flag |",
+                      "- **`a.py`**: is_valid() returns a bool instead of raising.\n"
+                      "- `pkg/*/b.py`: the caller now checks the returned flag."):
+            with self.subTest(files=files):
+                self.state = g.SessionState(stage="agreed", changed_files=[self.a, self.b])
+                self.assertNotIn("decision", self.stop(self.REVIEW.replace("Done.", files)))
+                self.assertEqual(self.state.stage, "discussing")
+
+    def test_the_reply_that_adds_the_missing_part_closes_the_unit_without_a_second_review(self):
+        self.assertEqual(self.stop(self.REVIEW)["decision"], "block")
+        addition = "### Explanation by file\n#### a.py\nx\n#### pkg/b.py\ny"  # no "## Final review" heading here
+        out = self.stop(addition, active=True)
+        self.assertIn("systemMessage", out)
+        self.assertEqual((self.state.stage, self.state.review_sent_back), ("discussing", False))
+
+    def test_a_retry_that_is_not_about_a_review_does_not_close_the_unit(self):
+        self.assertIsNone(self.stop("Still working on b.py.", active=True))
+        self.assertEqual(self.state.stage, "agreed")
 
     def test_section_with_a_heading_per_file_closes_unit(self):
         review = self.REVIEW.replace("Done.", "### Explanation by file\n#### a.py\nx\n#### `pkg/b.py` (new)\ny")
@@ -1070,6 +1093,61 @@ class AuditFixes(GateTestCase):
         g.save_state(self.env, "s", g.SessionState(stage="agreed"))
         self.assertEqual([p.name for p in g.state_path(self.env, "s").parent.iterdir()], [g.state_path(self.env, "s").name])
         self.assertEqual(g.load_state(self.env, "s").stage, "agreed")
+
+
+class Reports(GateTestCase):
+    """A report the developer asked for (a new document file) needs no agreement; code and existing docs do."""
+
+    def write(self, state, name, tool="Write"):
+        event = {"tool_name": tool, "tool_input": {"file_path": str(self.project / name)}, "cwd": str(self.project)}
+        return self.decision(g.decide_pre_tool_use(event, state, self.env)), event
+
+    def bash(self, state, command):
+        event = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.project)}
+        return self.decision(g.decide_pre_tool_use(event, state, self.env))
+
+    def test_new_report_is_writable_while_discussing_and_stays_editable(self):
+        state = g.SessionState()
+        decision, event = self.write(state, "docs/review-report.md")
+        self.assertIsNone(decision)
+        (self.project / "docs").mkdir()
+        (self.project / "docs" / "review-report.md").write_text("# Review\n", encoding="utf-8")
+        self.assertIsNone(self.write(state, "docs/review-report.md", tool="Edit")[0])  # now it exists, still ours
+        state.open_unit("agreed", "x")
+        self.assertIsNone(g.decide_post_tool_use(event, state, self.env))  # not a code change: no explanation asked
+        self.assertEqual(state.changed_files, [])
+
+    def test_code_existing_documents_and_instruction_files_stay_gated(self):
+        (self.project / "README.md").write_text("# Project\n", encoding="utf-8")
+        for name in ("app.py", "README.md", "CLAUDE.md", "skills/x/SKILL.md", ".claude/commands/go.md",
+                     ".github/notes.md", "requirements.txt", "report.py", "page.html"):
+            with self.subTest(name=name):
+                self.assertEqual(self.write(g.SessionState(), name)[0], "deny")
+
+    def test_a_document_created_in_an_open_unit_is_part_of_the_unit(self):
+        state = g.SessionState(stage="agreed", agreement="x")
+        decision, event = self.write(state, "docs/usage.md")
+        self.assertIsNone(decision)
+        g.decide_post_tool_use(event, state, self.env)
+        self.assertEqual((state.documents, len(state.changed_files)), ([], 1))
+
+    def test_command_output_can_be_saved_into_a_new_report(self):
+        state = g.SessionState()
+        self.assertIsNone(self.bash(state, "python3 -m pytest -q > test-report.txt 2>&1"))
+        self.assertIsNone(self.bash(state, "git log --oneline >> test-report.txt"))
+        (self.project / "notes.txt").write_text("old\n", encoding="utf-8")
+        for cmd in ("pytest > notes.txt", "pytest > out.py", "echo x > report.md && rm app.py", "pytest > ../outside.txt"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.bash(g.SessionState(), cmd), "deny")
+
+    def test_can_be_switched_off_and_is_remembered_across_hook_calls(self):
+        env = g.Env(data_dir=self.env.data_dir, project_dir=self.project,
+                    config={**CONFIG, "documents": {"enabled": False}})
+        event = {"tool_name": "Write", "tool_input": {"file_path": str(self.project / "report.md")}}
+        self.assertEqual(self.decision(g.decide_pre_tool_use(event, g.SessionState(), env)), "deny")
+        g.run("session-start", {"session_id": "s", "source": "startup"}, self.env)
+        self.assertIsNone(g.run("pre-tool-use", {"session_id": "s", **event}, self.env))
+        self.assertEqual(g.load_state(self.env, "s").documents, [str(self.project / "report.md")])
 
 
 class TaskTools(GateTestCase):

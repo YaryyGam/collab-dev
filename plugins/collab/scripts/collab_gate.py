@@ -33,7 +33,8 @@ GATE_MESSAGE = (
     "agreed on yet. Continue the discussion: the developer's approach → their reasons → analysis → "
     "alternatives → joint choice. Writing opens once the developer runs "
     "/collab:agree <the approach in their own words>, /collab:plan <the same>, /collab:skip or /collab:off "
-    "themselves. Do not try to get around the block some other way."
+    "themselves. Do not try to get around the block some other way. (A report the developer asked for, such as "
+    "a review or test report in a new .md/.txt file, is not blocked: write it with Write.)"
 )
 EDIT_ONLY_MESSAGE = (
     "collab: change the contents of project files only with Edit or Write, so the developer sees every "
@@ -122,6 +123,7 @@ class SessionState:
     planned: bool = False
     paused: bool = False
     stage_anchors: dict = field(default_factory=dict)  # like change_anchors, since the last pause
+    review_sent_back: bool = False  # the final review was given and Stop asked to add what it lacked
     # one-off permission from /collab:commit|push|git; outlives units (commits come after the review),
     # spent by the git call it allows or by the developer's next message
     git_grant: dict = field(default_factory=dict)
@@ -132,6 +134,8 @@ class SessionState:
     branch_fetched_at: float = 0.0
     branch_pending: str = ""
     branch_seen: str = ""
+    # reports and other documents this session created without an agreement (session-wide): they stay editable
+    documents: list = field(default_factory=list)
 
     @property
     def changes(self) -> int:
@@ -146,6 +150,7 @@ class SessionState:
         self.planned = False
         self.paused = False
         self.stage_anchors = {}
+        self.review_sent_back = False
 
     def close_unit(self) -> None:
         if self.stage in OPEN_STAGES:
@@ -319,7 +324,8 @@ def status_line(state: SessionState) -> str:
             f"[collab] mode={state.mode} stage=off: the developer turned the plugin off for the rest of "
             "the session. Work as regular Claude Code; the collaborative development rules do not apply."
         )
-    gate = "writes blocked until /collab:agree" if state.stage == "discussing" else "writes allowed"
+    gate = ("writes blocked until /collab:agree; new report files are allowed" if state.stage == "discussing"
+            else "writes allowed")
     line = f"[collab] mode={state.mode} stage={state.stage} ({gate})"
     if state.stage == "agreed":
         line += f"\nAgreed by the developer: \"{state.agreement}\""
@@ -407,18 +413,19 @@ def _subcommand(args: list) -> str:
     return ""
 
 
-def bash_write_reason(command: str, config: dict, skip_git: bool = False) -> str | None:
+def bash_write_reason(command: str, config: dict, skip_git: bool = False, safe_target=None) -> str | None:
     """Return a short description of why the command looks like a write, or None.
-    skip_git: leave git calls to the git gate (a developer's /collab:commit|push|git covers them)."""
+    skip_git: leave git calls to the git gate (a developer's /collab:commit|push|git covers them).
+    safe_target: an extra test for a redirect target that is fine to write (a report document)."""
     cfg = config["bash"]
     for script in _nested_scripts(command):
-        reason = bash_write_reason(script, config, skip_git)
+        reason = bash_write_reason(script, config, skip_git, safe_target)
         if reason:
             return reason
     stripped = _strip_literals(command)
 
     for target in _REDIRECT.findall(stripped):
-        if target not in cfg["safe_redirect_targets"]:
+        if target not in cfg["safe_redirect_targets"] and not (safe_target and safe_target(target)):
             return f"output redirected to a file ({target})"
 
     for segment in _SEPARATOR.split(stripped):
@@ -504,10 +511,10 @@ def powershell_write_reason(command: str, config: dict, skip_git: bool = False) 
     return None
 
 
-def shell_write_reason(tool: str, command: str, config: dict, skip_git: bool = False) -> str | None:
+def shell_write_reason(tool: str, command: str, config: dict, skip_git: bool = False, safe_target=None) -> str | None:
     if tool == "PowerShell":
         return powershell_write_reason(command, config, skip_git)
-    return bash_write_reason(command, config, skip_git)
+    return bash_write_reason(command, config, skip_git, safe_target)
 
 
 # --------------------------------------------------------------------------- #
@@ -1052,6 +1059,10 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     # the project map is documentation, not code under discussion: writable in every stage
     if tool in write_tools and _is_inside(_tool_path(tool_input), map_file(env)):
         return None
+    # so is a report Claude was asked for: a new document in the discussion stage, and afterwards the same file
+    cwd = Path(event.get("cwd") or env.project_dir)
+    if tool in write_tools and is_report(_tool_path(tool_input), cwd, state, env, register=state.stage == "discussing"):
+        return None
 
     if state.stage != "off" and tool in SHELL_TOOLS:
         denied = _git_denied(tool, tool_input.get("command") or "", state, env)
@@ -1084,10 +1095,48 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
             return None  # notes, memory, scratchpad — outside the code under discussion
         return _deny(GATE_MESSAGE, _gate_hint(state))
     if tool in SHELL_TOOLS:
-        reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
+        # `pytest > test-report.txt`: output saved into a new report file is not a change to the code
+        reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git,
+                                    lambda target: is_report(target, cwd, state, env, register=True))
         if reason:
             return _deny(f"{GATE_MESSAGE} (detected: {reason})", _gate_hint(state))
     return None
+
+
+def _document_path(path: str, cwd: Path, env: Env) -> str:
+    """The absolute path if it could be a report: a document type, inside the project, not a file that tools
+    read as instructions or config (CLAUDE.md, SKILL.md, anything under a dot-directory). Else ""."""
+    cfg = env.config.get("documents") or {}
+    if not cfg.get("enabled", True) or not path or path == "Q" or path.startswith("$"):
+        return ""
+    target = Path(_native_path(path)).expanduser()
+    target = target if target.is_absolute() else cwd / target
+    if target.suffix.lower() not in cfg.get("extensions", []) or not _is_inside(str(target), env.project_dir):
+        return ""
+    try:
+        inner = target.resolve().relative_to(env.project_dir.resolve())
+    except ValueError:  # the project root in another letter case: fall back to the name alone
+        inner = Path(target.name)
+    reserved = [name.lower() for name in cfg.get("not_documents", [])]
+    if inner.name.lower() in reserved or any(part.startswith(".") for part in inner.parts):
+        return ""
+    return str(target)
+
+
+def is_report(path: str, cwd: Path, state: SessionState, env: Env, register: bool = False) -> bool:
+    """A report or another document Claude writes on request (a review report, test results, notes) is not a
+    change to the code under discussion: no agreement needed. That covers a *new* document file and the ones
+    this session already created that way; an existing document (README, docs) is still a project change.
+    register: remember a new one, so that it can be edited later in the session."""
+    target = _document_path(path, cwd, env)
+    if not target:
+        return False
+    if target in state.documents:
+        return True
+    if not register or Path(target).exists():
+        return False
+    state.documents.append(target)
+    return True
 
 
 def _shown(path: str, env: Env) -> str:
@@ -1135,8 +1184,8 @@ def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | N
         return {"decision": "block", "reason": _stage_done_message(state, env)}
     if tool in env.config["write_tools"]:
         path = _tool_path(tool_input)
-        if path and _is_inside(path, map_file(env)):
-            return None  # the project map is not a code change: no tracking, no explanation needed
+        if path and (_is_inside(path, map_file(env)) or is_report(path, Path(event.get("cwd") or env.project_dir), state, env)):
+            return None  # the project map and reports are not code changes: no tracking, no explanation needed
         if path and _is_inside(path, env.project_dir) and path not in state.stage_anchors:
             state.stage_anchors[path] = event.get("tool_use_id") or ""
         if path and _is_inside(path, env.project_dir) and path not in state.changed_files:
@@ -1205,36 +1254,48 @@ def _explained_along_the_way(events: list, anchors: dict, final_message: str, en
     return explained
 
 
-def _files_missing_from_section(message: str, files: list, env: Env) -> list:
-    """Files without their own "#### <file>" heading under the "Explanation by file" section."""
-    m = re.search(env.config["explain_section_pattern"], message, re.M)
-    headings = re.findall(r"^#{3,6}\s.*$", message[m.end():], re.M) if m else []
-    return [f for f in files if not any(_names_file(h, f) for h in headings)]
+def _files_missing_from_review(message: str, files: list, env: Env) -> list:
+    """Files the review does not cover. A file is covered by its own heading, or by a table row, list item or
+    sentence that names it and says something about it (review_line_min_chars besides the name): reviews list
+    files in a table as often as under "#### <file>" headings, and asking for the headings made Claude repeat
+    the whole review."""
+    spare = env.config.get("review_line_min_chars", 30)
+    lines = message.splitlines()
+
+    def covered(path: str) -> bool:
+        name = Path(path).name
+        return any(_names_file(line, path) and (line.lstrip().startswith("#") or len(line.strip()) - len(name) >= spare)
+                   for line in lines)
+
+    return [f for f in files if not covered(f)]
 
 
 def _review_problems(event: dict, state: SessionState, env: Env, message: str) -> list:
     problems = []
     if not re.search(env.config["verification_heading_pattern"], message, re.M):
         problems.append(
-            "collab: the final review has no \"### Verification\" section (heading literally in English). Add it: which tests and "
-            "checks were actually run and with what result, what remains unverified. "
-            "If tests were not run, say so."
+            "collab: the final review has no \"### Verification\" section (heading literally in English). Reply with "
+            "that section only: which tests and checks were actually run and with what result, what remains "
+            "unverified. If tests were not run, say so."
         )
-    missing = _files_missing_from_section(message, state.changed_files, env)
+    missing = _files_missing_from_review(message, state.changed_files, env)
     if missing:  # read the transcript only when the review itself doesn't cover every file
         events = _transcript_events(event.get("transcript_path") or "") or []
         explained = _explained_along_the_way(events, state.change_anchors, message, env)
         missing = [p for p in missing if p not in explained]
     if missing:
         problems.append(
-            f"collab: these changed files were not explained along the way: {', '.join(_shown(p, env) for p in missing)}. "
+            f"collab: these changed files are not explained, neither along the way nor in the review: "
+            f"{', '.join(_shown(p, env) for p in missing)}. "
             "Your replies to the developer have no explanation of them: your thinking is not shown, and code "
             "inside Write/Edit calls does not count. So don't say they were explained earlier; just explain them now. "
-            "Add a \"### Explanation by file\" section to the final review with a \"#### <file>\" heading for "
-            "each of them: what changed in it and why, and for each new or changed function a card following "
+            "Reply with a \"### Explanation by file\" section for these files only, a \"#### <file>\" heading for "
+            "each: what changed in it and why, and for each new or changed function a card following "
             "the \"Code explanation format\" (\"In plain words\" pseudocode for non-trivial logic). "
             "A mechanical edit (import, rename) needs one sentence."
         )
+    if problems:
+        problems.append("Do not repeat the final review: the developer already has it. Reply with the missing part only.")
     return problems
 
 
@@ -1255,9 +1316,11 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
     message = event.get("last_assistant_message") or ""
     retrying = bool(event.get("stop_hook_active"))
 
-    if re.search(env.config["review_heading_pattern"], message, re.M):
+    # the reply that adds what the review lacked has no review heading of its own: it still closes the unit
+    if re.search(env.config["review_heading_pattern"], message, re.M) or (retrying and state.review_sent_back):
         problems = [] if retrying else _review_problems(event, state, env, message)
         if problems:
+            state.review_sent_back = True
             return _block("\n\n".join(problems), "Stop")
         agreement = state.agreement
         state.close_unit()
@@ -1334,7 +1397,11 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
                     "\nThe project is not a git repository, so the map could not be excluded from git: "
                     "tell the developer.")
     elif event_name == "pre-tool-use":
-        return decide_pre_tool_use(event, state, env)  # read-only: no save
+        known = len(state.documents)
+        out = decide_pre_tool_use(event, state, env)
+        if len(state.documents) != known:  # the only thing this event records: a new report file it let through
+            save_state(env, session_id, state)
+        return out
     elif event_name == "post-tool-use":
         out = decide_post_tool_use(event, state, env)
     elif event_name == "stop":

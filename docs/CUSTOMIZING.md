@@ -41,7 +41,8 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 ### Configure "explanation by file" and "contents only through Edit"
 
 - `explain_min_chars` (200): how long a text naming a file must be to count as its explanation along the way.
-- `explain_section_pattern`: the review section where unexplained files get their `#### <file>` heading.
+- `explain_section_pattern`: the heading of the review section for files not explained along the way (no longer used by the check itself).
+- `review_line_min_chars` (default 30, may be added to `gate.json`): how much text besides the file name a table row or list item of the review needs to count as covering the file; a heading naming the file always counts.
 - `edit_only`: which shell constructs count as writing file contents in an open unit — `target_commands` (tee-like commands whose first argument is the file), `flag_writes` (in-place flags), `inline_write_markers` and `powershell_write_markers`. Redirections into the project are always checked. Tests: `EditOnlyInOpenUnit` in `tests/test_collab_gate.py`.
 
 ### Choose which git actions need the developer's command
@@ -65,6 +66,8 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 - `fetch_interval_seconds`: how often a regular message fetches the upstream; `/collab:agree|plan|skip|resume|before-changes` always fetch.
 - `fetch_timeout_seconds`: after this the fetch is cut off and the check uses the last fetched state. The `UserPromptSubmit` hook timeout in `hooks/hooks.json` (30 s) must stay above it.
 - `max_listed`: how many incoming commits are listed for Claude.
+
+`documents` in `config/gate.json`: which new files count as reports and can be written without an agreement. `extensions` is the list of file types, `not_documents` the file names that never count (instruction and config files that happen to be `.md`/`.txt`); files under a dot-directory never count either. `"enabled": false` puts reports back behind `/collab:agree`.
 
 `task_tools` in `config/gate.json`: `"auto_enable": true` makes the `SessionStart` hook add `"env": {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"}` to the project's `.claude/settings.local.json` (kept out of git), because `/collab:plan` needs `TaskCreate`/`TaskUpdate` and newer models don't get them otherwise. Set it to `false` to manage the variable yourself; a value you already set, in the environment or in that file, is never changed.
 
