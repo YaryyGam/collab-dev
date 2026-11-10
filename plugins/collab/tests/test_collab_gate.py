@@ -1008,5 +1008,121 @@ class FailClosed(unittest.TestCase):
         self.assertEqual((code, out), (1, ""))
 
 
+class NotTheDeveloper(GateTestCase):
+    """UserPromptSubmit also fires for a finished background task or agent; Stop fires while one is running."""
+
+    NOTIFICATION = "<task-notification>\n<task-id>bt9qffebp</task-id>\n<status>completed</status>\n</task-notification>"
+
+    def test_a_task_notification_is_not_the_developers_reply(self):
+        state = g.SessionState(stage="agreed", agreement="x", planned=True, paused=True,
+                               git_grant={"action": "commit"}, branch_pending="abc123")
+        for prompt in (self.NOTIFICATION, "  <agent-message from=\"a1\">report</agent-message>"):
+            out = g.decide_user_prompt({"prompt": prompt}, state, self.env)
+            self.assertNotIn("the developer replied", out["hookSpecificOutput"]["additionalContext"])
+            self.assertIn("Plan: paused", out["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual((state.paused, state.git_grant), (True, {"action": "commit"}))
+        with mock.patch.object(g, "check_branch") as check:
+            g.run("user-prompt-submit", {"session_id": "s", "prompt": self.NOTIFICATION}, self.env)
+            check.assert_not_called()
+        g.decide_user_prompt({"prompt": "go on"}, state, self.env)
+        self.assertEqual((state.paused, state.git_grant), (False, {}))
+
+    def test_stop_waits_for_background_work_instead_of_asking_for_a_review(self):
+        state = g.SessionState(stage="agreed", agreement="x", changed_files=["a.py"])
+        event = {"last_assistant_message": "The reviewer agent is running.", "stop_hook_active": False}
+        running = [{"id": "t1", "type": "subagent", "status": "running", "agent_type": "collab:reviewer"}]
+        self.assertIsNone(g.decide_stop({**event, "background_tasks": running}, state, self.env))
+        self.assertEqual(g.decide_stop({**event, "background_tasks": []}, state, self.env)["decision"], "block")
+
+
+class AuditFixes(GateTestCase):
+    def test_a_script_handed_to_another_shell_is_parsed_too(self):
+        for cmd in ("sh -c 'echo x > app.py'", 'bash -lc "rm -rf build"', "eval 'git commit -m x'",
+                    "/bin/bash -c 'sed -i s/a/b/ f.py'"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(g.bash_write_reason(cmd, CONFIG))
+        for cmd in ("bash -c 'pytest -q 2>&1 | tail -5'", "sh -c \"grep -rn 'a > b' src\"", "echo 'bash -c rm'"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(g.bash_write_reason(cmd, CONFIG))
+        self.assertEqual(g._git_calls("Bash", "bash -c 'git add -A && git commit -m x'", self.env), [("commit", ["-m", "x"])])
+        self.assertIsNotNone(g.shell_content_write_reason("Bash", "sh -c 'echo x >> app.py'", self.project, self.env))
+
+    def test_wrapper_flags_with_values_do_not_hide_the_program(self):
+        for cmd in ("env -u FOO git commit -m x", "nice -n 5 git push", "sudo -u deploy git push"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(len(g._git_calls("Bash", cmd, self.env)), 1)
+        self.assertIsNotNone(g.bash_write_reason("sudo -n rm -rf build", CONFIG))
+        self.assertIsNotNone(g.bash_write_reason("env -i rm -rf build", CONFIG))
+
+    def test_plain_push_permission_does_not_cover_every_branch_or_tags(self):
+        grant = {"action": "push", "branch": ""}
+        for args in (["--all", "origin"], ["--tags", "origin"], ["--prune", "origin"], ["origin", "--branches"]):
+            self.assertFalse(g._grant_allows(grant, "push", args), args)
+        self.assertTrue(g._grant_allows(grant, "push", ["-u", "origin", "HEAD"]))
+
+    @unittest.skipUnless(sys.platform in ("darwin", "win32"), "file names are case-sensitive here")
+    def test_project_path_in_another_case_is_still_the_project(self):
+        target = str(self.project / "app.py")
+        swapped = target.replace("project", "PROJECT")
+        self.assertEqual(self.decision(self.pre(g.SessionState(), "Write", file_path=swapped)), "deny")
+
+    def test_parallel_hooks_do_not_share_a_tmp_file(self):
+        g.save_state(self.env, "s", g.SessionState(stage="agreed"))
+        self.assertEqual([p.name for p in g.state_path(self.env, "s").parent.iterdir()], [g.state_path(self.env, "s").name])
+        self.assertEqual(g.load_state(self.env, "s").stage, "agreed")
+
+
+class TaskTools(GateTestCase):
+    VAR = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+
+    def settings(self):
+        return json.loads((self.project / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+
+    def test_writes_the_variable_once_and_keeps_other_settings(self):
+        path = self.project / ".claude" / "settings.local.json"
+        path.parent.mkdir()
+        path.write_text('{"permissions": {"allow": ["Bash(ls:*)"]}, "env": {"DEBUG": "1"}}', encoding="utf-8")
+        self.assertTrue(g.enable_task_tools(self.env, {}))
+        self.assertEqual(self.settings(), {"permissions": {"allow": ["Bash(ls:*)"]},
+                                           "env": {"DEBUG": "1", self.VAR: "1"}})
+        self.assertFalse(g.enable_task_tools(self.env, {}))  # already there: no second notice
+
+    def test_creates_the_file_and_keeps_it_out_of_git(self):
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        self.assertTrue(g.enable_task_tools(self.env, {}))
+        self.assertEqual(self.settings(), {"env": {self.VAR: "1"}})
+        self.assertIn("/.claude/settings.local.json",
+                      (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines())
+
+    def test_leaves_the_developers_own_choice_alone(self):
+        self.assertFalse(g.enable_task_tools(self.env, {self.VAR: "1"}))  # already on in the environment
+        self.assertFalse((self.project / ".claude").exists())
+        path = self.project / ".claude" / "settings.local.json"
+        path.parent.mkdir()
+        for text in ('{"env": {"%s": "0"}}' % self.VAR, "{not json", "[]", '{"env": "x"}'):
+            path.write_text(text, encoding="utf-8")
+            self.assertFalse(g.enable_task_tools(self.env, {}), text)
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_can_be_switched_off_in_the_config(self):
+        env = g.Env(data_dir=self.env.data_dir, project_dir=self.project,
+                    config={**CONFIG, "task_tools": {"auto_enable": False}})
+        self.assertFalse(g.enable_task_tools(env, {}))
+        self.assertFalse((self.project / ".claude").exists())
+
+    def test_session_start_tells_the_developer_only_when_it_wrote(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop(self.VAR, None)
+            first = g.run("session-start", {"session_id": "s", "source": "startup"}, self.env)
+            second = g.run("session-start", {"session_id": "s", "source": "clear"}, self.env)
+        self.assertIn(self.VAR, first["systemMessage"])
+        self.assertIn("TaskCreate", first["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("systemMessage", second)
+
+    def test_plan_command_covers_a_session_without_task_tools(self):
+        out, _ = self.command(g.SessionState(), "collab:plan", "split the settings into a dataclass and pass it explicitly")
+        self.assertIn("no task tools", out["hookSpecificOutput"]["additionalContext"])
+
+
 if __name__ == "__main__":
     unittest.main()

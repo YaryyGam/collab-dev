@@ -22,6 +22,7 @@ The goal: one file that explains the project completely, so neither the develope
 Decide by **lines of source code**, not by the number of files: count them with `git ls-files | xargs wc -l`, leaving out lockfiles, generated and vendored code, fixtures and data files.
 
 - **Up to about 5,000 lines**: analyze it yourself.
+- **More than that, and no Agent tool in this session** (or the agent type is not available): analyze it yourself area by area, and say in the map's header that it was done without parallel analysts and which parts were only skimmed.
 - **More than that**: launch `collab:analyst` agents **in parallel** (several Agent calls in one message, `subagent_type: "collab:analyst"`), one per area, 3–5 in total:
   1. stack, infrastructure, config, tests and CI;
   2. entry points and API;

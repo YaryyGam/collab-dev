@@ -16,7 +16,7 @@ Do not write or change any files: this is still the discussion stage, and writin
 3. **2–4 substantive options**, from the simplest that works to the more capable ones. Don't pad the list with straw men. For each option:
    - **How it works:** the idea in a few sentences, plus 3–8 lines of pseudocode "in plain words" if the logic is non-trivial.
    - **Libraries and technologies:** what you would use, and for each, why this one, what it gives over the alternative (another library, the standard library, or what the project already uses), and what it costs (a new dependency, infrastructure, a learning curve). Say so explicitly when an option needs nothing new.
-   - **Advantages** and **drawbacks** for *this* project.
+   - **Advantages** and **drawbacks** for *this* project. For a risk or a consequence, say whether you checked it (where: `path:line`, a command) or it is a hypothesis and how to check it (see "Risk and consequences" in the rules); don't make a risk bigger to sound careful.
    - **When it is the right choice:** the conditions or thresholds under which it wins.
    - **Effort:** roughly which files or components it touches.
 4. **Comparison:** a short table on only the criteria that actually distinguish the options (complexity, performance, reliability, security, fit with the architecture, testability).

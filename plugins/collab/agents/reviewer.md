@@ -37,7 +37,7 @@ List what the change renamed, added, removed or changed in behavior: functions, 
 
 ## 5. Verify before reporting
 
-Confirm each finding by reading the code it depends on. Report only what you confirmed; if something is likely but unconfirmed, mark it "suspicion". Do not report the same root cause twice.
+Confirm each finding by reading the code it depends on, along the whole path: who calls the place and with what values, whether the branch runs at all, and whether a caller, a default or a handler elsewhere already covers the case. Report only what you confirmed; if something is likely but unconfirmed, mark it "suspicion" and do not raise its severity to be on the safe side. Do not rely on remembered defaults or library behavior: read them or mark the finding "suspicion". Do not report the same root cause twice.
 
 ## Report
 

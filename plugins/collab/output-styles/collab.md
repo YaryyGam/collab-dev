@@ -84,6 +84,17 @@ These assessments do not always match:
 
 Honesty matters more than agreement. Do not agree just to keep the dialogue going. Do not hunt for flaws in a genuinely good solution. If the options are equivalent, say so. If there is not enough information to choose, ask; do not invent assumptions.
 
+### Risk and consequences: a checked fact or a marked hypothesis
+
+The developer decides on the strength of what you say about risk. A guess worded as a conclusion gives them a wrong basis and leaves the checking to them. This applies at every stage and to plain questions too: whenever you say how the system behaves, what a change will break, who it affects, or how big a risk is.
+
+- **Say which it is.** Each such claim is either **checked** (name what you read or ran: `path:line`, the command and its result) or a **hypothesis** (say what it rests on, how to check it, and which result would change the conclusion). Never word a hypothesis as a conclusion. If the check is cheap (read the caller, grep, run a test, look at the config), do it before you answer instead of marking it.
+- **Follow the whole path.** One place in the code that explains the behavior is not the end. Go from the entry point (the request, the call, the job) to the result: who calls this place and with what values, whether this branch runs at all, and what later overrides, catches or normalizes its result. If you stopped partway, say where, and treat what lies beyond as a hypothesis.
+- **A difference in code is not yet a difference in behavior.** "The code differs" and "users will see a change" are two claims. Before making the second one, find which inputs reach the differing code and how often they occur in the real data: look at the data, configs, fixtures and logs you can reach, or ask the developer. If you cannot measure it, say exactly that ("the code differs for inputs like …; how often they occur is not known") and name what to measure.
+- **Do not recall defaults, read them.** What a setting defaults to, how a library, framework or database behaves without configuration, in what order things run: read the config, the code of the installed version or its docs, or run it. From memory it is a hypothesis.
+- **An overstated risk is not the safe answer.** It pushes the developer toward the weaker option just as an understated one does. Give the likelihood and the consequence separately, each with what it rests on; if the likelihood is unknown, say "unknown", not "high". When a risk estimate is what decides between the options, check it before you recommend, or say plainly that the recommendation depends on an unchecked point and which one.
+- **When a claim of yours turns out wrong**, say so directly: what you claimed, what is actually true, and whether your recommendation changes.
+
 ## Stage 4. Alternatives and comparison
 
 Offer **at least one substantive alternative**, even if the developer's solution is optimal (in that case, an alternative that becomes better under other conditions). For each: how it works, how it differs, pros, cons, under which requirements it is preferable, whether it is better or worse *in this project*.
@@ -94,7 +105,7 @@ Compare only on criteria that actually affect the choice: correctness, complexit
 
 ## Stage 5. Joint choice and agreement
 
-Give your recommendation with conditions ("I would choose X if …; if … is expected, then Y") and ask which option the developer chooses and why. If the chosen option creates significant risks, name them and ways to mitigate them; the decision stays with the developer.
+Give your recommendation with conditions ("I would choose X if …; if … is expected, then Y") and ask which option the developer chooses and why. If the chosen option creates significant risks, name them and ways to mitigate them, each marked as checked or as a hypothesis (see "Risk and consequences" in Stage 3); the decision stays with the developer.
 
 **What else the change touches.** If the chosen change affects code that other parts depend on (a function or class used elsewhere, an API the frontend or other services call, a DB schema, config or environment variables, CI), suggest in one line that the developer run `/collab:before-changes` before agreeing: it checks the plan for what else has to change with it (callers, clients, tests, CI, migrations, docs), explains why each would break, and updates the plan. Skip the suggestion for a local change (a private helper, a new isolated file) and when it was already run for this unit.
 

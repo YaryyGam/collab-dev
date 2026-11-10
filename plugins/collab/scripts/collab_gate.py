@@ -54,7 +54,10 @@ GIT_HINT = ("collab: Claude needs your permission for git: /collab:commit, /coll
             "or /collab:git <command>.")
 PLAN_START_MESSAGE = (
     "The developer asked for a staged plan. Create it as tasks with TaskCreate, one per stage, then stop and "
-    "show the plan: writes and starting a stage are blocked until the developer replies."
+    "show the plan: writes and starting a stage are blocked until the developer replies. If TaskCreate is only "
+    "listed as a deferred tool, load the task tools with ToolSearch first. If this session has no task tools at "
+    "all, do not just write the plan as text and go on: follow \"When the task tools are missing\" in the "
+    "command's instructions."
 )
 PAUSED_MESSAGE = (
     "collab: the plan is paused for the developer: changing files and starting or finishing a stage are blocked "
@@ -232,6 +235,47 @@ def exclude_from_git(env: Env, rel_path: Path) -> bool:
     return True
 
 
+TASK_TOOLS_VAR = "CLAUDE_CODE_ENABLE_TODO_TOOLS"
+LOCAL_SETTINGS = Path(".claude") / "settings.local.json"  # relative to the project root; personal, not committed
+TASK_TOOLS_NOTICE = (
+    "collab: turned on the task tools for this project (" + TASK_TOOLS_VAR + "=1 in .claude/settings.local.json): "
+    "/collab:plan keeps its stages as tasks and pauses after each one. If Claude still says it has no task "
+    "tools in this session, restart Claude Code once."
+)
+TASK_TOOLS_CONTEXT = (
+    "collab: the plugin has just turned on the task tools (TaskCreate, TaskUpdate, TaskList, TaskGet) for this "
+    "project in .claude/settings.local.json. If they are not among your tools in this session, Claude Code had "
+    "already built its tool list: they will be there after the developer restarts it."
+)
+
+
+def enable_task_tools(env: Env, environ=None) -> bool:
+    """Newer models get TaskCreate/TaskUpdate/TaskList/TaskGet only when CLAUDE_CODE_ENABLE_TODO_TOOLS is set
+    before Claude Code starts, and /collab:plan is built on them. Set it in the project's personal settings.
+    True only when this call wrote it. A value the developer already chose (in the environment or in the file,
+    "0" included) is left alone, and so is a settings file that is not a JSON object."""
+    if not env.config.get("task_tools", {}).get("auto_enable", True):
+        return False
+    environ = os.environ if environ is None else environ
+    if environ.get(TASK_TOOLS_VAR) or env.project_dir.resolve() == Path.home().resolve():
+        return False
+    path = env.project_dir / LOCAL_SETTINGS
+    try:
+        created = not path.exists()
+        settings = {} if created else json.loads(path.read_text(encoding="utf-8") or "{}")
+        variables = settings.setdefault("env", {}) if isinstance(settings, dict) else None
+        if not isinstance(variables, dict) or TASK_TOOLS_VAR in variables:
+            return False
+        variables[TASK_TOOLS_VAR] = "1"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    if created:
+        exclude_from_git(env, LOCAL_SETTINGS)
+    return True
+
+
 def state_path(env: Env, session_id: str) -> Path:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id or "unknown")
     return env.data_dir / "sessions" / f"{safe}.json"
@@ -250,7 +294,7 @@ def load_state(env: Env, session_id: str) -> SessionState | None:
 def save_state(env: Env, session_id: str, state: SessionState) -> None:
     path = state_path(env, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")  # hooks of parallel tool calls must not share one tmp file
     tmp.write_text(json.dumps(asdict(state), ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)  # atomic: a concurrent reader never sees half a file
 
@@ -314,19 +358,39 @@ def _strip_literals(command: str) -> str:
     return _QUOTED.sub(" Q ", command)
 
 
+_NESTED_SHELL = re.compile(
+    r"(?:^|[\s;&|(])(?:(?:[\w./-]*/)?(?:sh|bash|zsh|dash|ksh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c|eval)\s+"
+    r"(?:'([^']*)'|\"((?:\\.|[^\"\\])*)\")")
+
+
+def _nested_scripts(command: str) -> list:
+    """The scripts handed to another shell as a string: `bash -c '…'`, `sh -lc "…"`, `eval '…'`.
+    Quoted strings are otherwise dropped before parsing, which would hide a whole command line."""
+    return [single or double for single, double in _NESTED_SHELL.findall(_HEREDOC.sub("\n", command))]
+
+
 def _program_name(word: str) -> str:
     """`/usr/bin/rm`, `C:\\Git\\usr\\bin\\RM.exe` → `rm`."""
     name = re.split(r"[\\/]", word)[-1].lower()
     return name[:-4] if name.endswith(".exe") else name
 
 
+_WRAPPER_VALUE_FLAGS = {  # wrapper flags followed by a separate value, which is not the wrapped program
+    "env": ("-u", "--unset", "-C", "--chdir"),
+    "nice": ("-n",),
+    "sudo": ("-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T"),
+    "xargs": ("-n", "-I", "-P", "-L", "-d", "-E", "-s", "-a"),
+}
+
+
 def _command_words(segment: str, wrappers: list) -> list:
     words = segment.split()
     while words and (_ASSIGNMENT.match(words[0]) or _program_name(words[0]) in wrappers):
+        with_value = _WRAPPER_VALUE_FLAGS.get(_program_name(words[0]), ())
         words = words[1:]
-        # `env -i` / `nice -n 5`: skip the wrapper's own flags
+        # `env -i` / `nice -n 5` / `env -u NAME`: skip the wrapper's own flags and the values they take
         while words and words[0].startswith("-"):
-            words = words[1:]
+            words = words[2:] if words[0] in with_value else words[1:]
     return words
 
 
@@ -347,6 +411,10 @@ def bash_write_reason(command: str, config: dict, skip_git: bool = False) -> str
     """Return a short description of why the command looks like a write, or None.
     skip_git: leave git calls to the git gate (a developer's /collab:commit|push|git covers them)."""
     cfg = config["bash"]
+    for script in _nested_scripts(command):
+        reason = bash_write_reason(script, config, skip_git)
+        if reason:
+            return reason
     stripped = _strip_literals(command)
 
     for target in _REDIRECT.findall(stripped):
@@ -446,7 +514,8 @@ def shell_write_reason(tool: str, command: str, config: dict, skip_git: bool = F
 # Git gate: history-changing git commands only with the developer's one-off permission
 # --------------------------------------------------------------------------- #
 
-_PUSH_FORCE = ("-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d")
+_PUSH_FORCE = ("-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d",
+               "--all", "--branches", "--tags", "--prune")  # the last four push or delete more than one branch
 
 
 def _git_calls(tool: str, command: str, env: Env) -> list:
@@ -456,6 +525,9 @@ def _git_calls(tool: str, command: str, env: Env) -> list:
     else:
         stripped, separator = _strip_literals(command), _SEPARATOR
     calls = []
+    if tool != "PowerShell":
+        for script in _nested_scripts(command):
+            calls += _git_calls(tool, script, env)
     for segment in separator.split(stripped):
         words = _command_words(segment, env.config["bash"]["wrappers"])
         while words and words[0] in ("&", "."):  # PowerShell call operators
@@ -526,6 +598,10 @@ def shell_content_write_reason(tool: str, command: str, cwd: Path, env: Env) -> 
         if any(re.search(marker, command, re.I) for marker in cfg["powershell_write_markers"]):
             return "file write through .NET"
     else:
+        for script in _nested_scripts(command):
+            reason = shell_content_write_reason(tool, script, cwd, env)
+            if reason:
+                return reason
         stripped = _strip_literals(command)
         redirect, separator = _REDIRECT, _SEPARATOR
 
@@ -750,7 +826,10 @@ def _native_path(path: str) -> str:
 
 def _is_inside(path: str, root: Path) -> bool:
     try:
-        Path(_native_path(path)).expanduser().resolve().relative_to(root.resolve())
+        target, base = Path(_native_path(path)).expanduser().resolve(), root.resolve()
+        if sys.platform in ("darwin", "win32"):  # file names ignore case there: /Proj/app.py is /proj/APP.py
+            target, base = Path(str(target).casefold()), Path(str(base).casefold())
+        target.relative_to(base)
         return True
     except (ValueError, OSError):
         return False
@@ -807,10 +886,19 @@ def decide_session_start(event: dict, state: SessionState | None, env: Env) -> t
     return _context("SessionStart", text), state
 
 
+def from_developer(event: dict, env: Env) -> bool:
+    """UserPromptSubmit also fires when a background command or agent finishes and when another session writes
+    in: the "prompt" is then a notification, not the developer's reply, and must not count as one."""
+    prompt = (event.get("prompt") or "").lstrip()
+    return not prompt.startswith(tuple(env.config.get("not_developer_prompt_prefixes", [])))
+
+
 def decide_user_prompt(event: dict, state: SessionState, env: Env) -> dict | None:
     # /collab:* commands get a fresh status from the expansion hook instead
     if (event.get("prompt") or "").lstrip().startswith("/collab:"):
         return None
+    if not from_developer(event, env):  # the pause, a git permission and a branch question wait for the developer
+        return _context("UserPromptSubmit", status_line(state))
     state.git_grant = {}  # an unused git permission does not outlive the turn it was given for
     if state.paused and state.stage in OPEN_STAGES:
         # any reply lifts the pause; whether it means "go on" or "fix this" is Claude's call
@@ -1188,6 +1276,8 @@ def decide_stop(event: dict, state: SessionState, env: Env) -> dict | None:
 
     if state.changes == 0 or retrying or _ends_with_question(message):
         return None
+    if event.get("background_tasks"):  # waiting for a background command or agent: the turn resumes when it reports
+        return None
     return _block(
         f"collab: {state.changes} file(s)/command(s) changed in this unit of work and there is no final review. "
         "Do not close the unit early: first check the agreement point by point. If anything it covers is not done "
@@ -1214,6 +1304,9 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
     if event_name == "session-start":
         out, state = decide_session_start(event, state, env)
         save_state(env, session_id, state)
+        if enable_task_tools(env):
+            out["hookSpecificOutput"]["additionalContext"] += "\n\n" + TASK_TOOLS_CONTEXT
+            out["systemMessage"] = TASK_TOOLS_NOTICE
         return out
 
     if state is None:  # plugin enabled mid-session: start from defaults
@@ -1221,7 +1314,7 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
 
     if event_name == "user-prompt-submit":
         # first, so the status line below already shows a branch question raised by this message
-        context, notice = check_branch(event, state, env)
+        context, notice = check_branch(event, state, env) if from_developer(event, env) else ("", "")
         out = decide_user_prompt(event, state, env)
         if context:
             out = out or _context("UserPromptSubmit", "")

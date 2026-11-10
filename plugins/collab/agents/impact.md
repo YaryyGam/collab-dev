@@ -36,6 +36,8 @@ If the project has a fast test command (README, CLAUDE.md/AGENTS.md, `package.js
 
 Open every reference you report and confirm it really depends on the changed thing in a way the change affects. A match of a common name in unrelated code is not a finding. If you deduce rather than read something, mark it **(inferred)** and say from what.
 
+Follow the whole path before you call something a breakage: who reaches this place and with what values, whether the affected branch runs at all, and whether anything in between (an explicit argument that overrides a default, an adapter, a normalizer, an error handler) cancels the effect. A difference in code is not yet a difference in behavior: name the concrete input or scenario that hits it, and say whether it occurs in this project (callers, configs, fixtures, data you can read). Do not recall defaults or library behavior from memory: read the config or the installed version's code, or mark it **(inferred)**. A dependent whose failure you could not confirm goes under "To check during the work", not under "Must change" with a raised level: an overstated risk misleads as much as a missed one.
+
 ## Report
 
 Write in the language the task asks for; keep identifiers, paths and code as they are.
@@ -57,4 +59,4 @@ Baseline tests: <command> → <result> | not run: <why>
 Not checked: <consumers outside the repository, dynamic access you couldn't trace, areas you only skimmed>
 ```
 
-`high`: breaks the build, a test, CI, a running client or stored data; `medium`: wrong behavior in an edge case, a stale schema or config; `low`: docs and comments. If nothing depends on the change, say so plainly and list what you searched.
+`high`: breaks the build, a test, CI, a running client or stored data; `medium`: wrong behavior in an edge case, a stale schema or config; `low`: docs and comments. The level is how bad a confirmed failure is, not how unsure you are. If nothing depends on the change, say so plainly and list what you searched.

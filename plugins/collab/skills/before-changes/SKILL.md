@@ -22,11 +22,11 @@ From the plan and the code, list concretely what it will change: files; function
 ## 2. Find what depends on it
 
 - **Local change** (only internal items: a private helper, a new isolated file, a body change that keeps the behavior callers rely on): check it yourself, quickly: grep the names, open the callers and the tests.
-- **Anything else**: launch the `collab:impact` agent with the Agent tool (`subagent_type: "collab:impact"`). If the plan spans independent areas (for example a backend endpoint and a DB schema), launch one agent per area **in parallel** (several Agent calls in one message), at most 3. Give each agent the project directory, its part of the change list with paths, and the developer's language. Do not tell it what you expect it to find: its value is finding what the plan missed. If `.collab/project-map.md` exists, mention it: the agent uses it as leads only.
+- **Anything else**: launch the `collab:impact` agent with the Agent tool (`subagent_type: "collab:impact"`). If the plan spans independent areas (for example a backend endpoint and a DB schema), launch one agent per area **in parallel** (several Agent calls in one message), at most 3. Give each agent the project directory, its part of the change list with paths, and the developer's language. Do not tell it what you expect it to find: its value is finding what the plan missed. If `.collab/project-map.md` exists, mention it: the agent uses it as leads only. If this session has no Agent tool or the agent type is not available, do the search yourself by the same categories (code, API clients, data, config, CI, tests, docs) and say in the report that it was done without the agent.
 
 ## 3. Verify
 
-Open the code behind every finding that would add work to the plan. Drop findings that don't hold up, and say which and why. Keep likely-but-unconfirmed ones as "check during the work".
+Open the code behind every finding that would add work to the plan, and follow the whole path, not only the line that matched: does the changed code reach this place with values the change affects, and does anything in between (a default, an adapter, a normalizer, an error handler) cancel the effect? "The code differs" is not yet "it breaks": name the input or scenario that hits the difference and say whether it occurs in this project (callers, data, configs, fixtures). Drop findings that don't hold up, and say which and why. Keep likely-but-unconfirmed ones as "check during the work"; do not raise their risk to be on the safe side.
 
 ## 4. Update the plan
 
@@ -40,7 +40,7 @@ In the developer's language:
 
 1. **The updated plan**: the steps in order, with the added items marked as new and the number of the finding that added each.
 2. **What would break and why**: one numbered entry per finding, so the developer can refer to it:
-   - **Where**: `path:line`, and the risk (high / medium / low).
+   - **Where**: `path:line`, and the risk (high / medium / low): how bad the failure is, for a failure you confirmed. Say separately how often the scenario occurs if you know it, or that it is not known.
    - **Why it breaks**: the chain from the plan to the failure, in plain words: how this place depends on the code being changed, what the plan changes there, and what exactly happens afterwards (a concrete input or scenario → the error, wrong result or failing job). For example: "`OrderBadge.tsx:14` reads `order.status` from the `/orders` response; the plan renames the field to `state`, so the value becomes `undefined`, the badge renders empty, and nothing fails loudly: no test covers it".
    - **What to do**: one line, and which plan step it went into.
 3. **Check during the work**: suspected links not confirmed.

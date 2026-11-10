@@ -63,8 +63,10 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 - `enabled: false` turns the check off.
 - `auto_pull: false` never updates the branch itself: when it is behind, Claude always asks first and project changes wait for your reply.
 - `fetch_interval_seconds`: how often a regular message fetches the upstream; `/collab:agree|plan|skip|resume|before-changes` always fetch.
-- `fetch_timeout_seconds`: after this the fetch is cut off and the check uses the last fetched state. The `UserPromptSubmit` hook timeout in `hooks/hooks.json` (20 s) must stay above it.
+- `fetch_timeout_seconds`: after this the fetch is cut off and the check uses the last fetched state. The `UserPromptSubmit` hook timeout in `hooks/hooks.json` (30 s) must stay above it.
 - `max_listed`: how many incoming commits are listed for Claude.
+
+`task_tools` in `config/gate.json`: `"auto_enable": true` makes the `SessionStart` hook add `"env": {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"}` to the project's `.claude/settings.local.json` (kept out of git), because `/collab:plan` needs `TaskCreate`/`TaskUpdate` and newer models don't get them otherwise. Set it to `false` to manage the variable yourself; a value you already set, in the environment or in that file, is never changed.
 
 Tests: `BranchCheck` in `tests/test_collab_gate.py`.
 

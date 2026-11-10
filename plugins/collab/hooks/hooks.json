@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.sh\" user-prompt-submit",
-            "timeout": 20
+            "timeout": 30
           }
         ]
       }
@@ -41,7 +41,8 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run_hook.sh\" pre-tool-use",
-            "timeout": 10
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       }
