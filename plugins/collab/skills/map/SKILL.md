@@ -38,7 +38,7 @@ Merge the findings. Where they disagree or something looks off, read the code yo
 
 ## 4. Write `.collab/project-map.md`
 
-Write it with the Write tool (the plugin allows this file in every stage and keeps it out of git). Language: the developer's; identifiers, paths and code as they are. Every factual statement carries a `path:line` reference. Mermaid diagrams: keep each under ~25 nodes; split a bigger one.
+Write it with the Write tool (the plugin allows anything under `.collab/` in every stage and keeps the folder out of git). Language: the developer's; identifiers, paths and code as they are. Every factual statement carries a `path:line` reference. Mermaid diagrams: keep each under ~25 nodes; split a bigger one.
 
 ```
 # <Project name> — project map

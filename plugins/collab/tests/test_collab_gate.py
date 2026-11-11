@@ -646,7 +646,7 @@ class ProjectMap(GateTestCase):
         out = g.run("user-prompt-expansion", {"session_id": "s", "command_name": "collab:map", "command_args": ""}, self.env)
         self.assertIn(".collab/project-map.md", out["hookSpecificOutput"]["additionalContext"])
         exclude = (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-        self.assertIn("/.collab/project-map.md", exclude.splitlines())
+        self.assertIn("/.collab/", exclude.splitlines())  # the whole folder, not the map alone
 
     def test_map_command_works_when_off(self):
         out, journal = self.command(g.SessionState(stage="off"), "collab:map", "payments")
@@ -660,6 +660,85 @@ class ProjectMap(GateTestCase):
         Path(self.path).write_text("# Project map\n", encoding="utf-8")
         out, _ = g.decide_session_start({"source": "startup"}, None, self.env)
         self.assertIn(".collab/project-map.md", out["hookSpecificOutput"]["additionalContext"])
+
+
+class CollabFolder(GateTestCase):
+    """.collab/ is Claude's folder for analysis and documents: any file, any stage, any tool; never tracked;
+    kept out of git. Only the reviewer notes in it stay closed, and it opens nothing outside itself."""
+
+    STATES = {
+        "discussing": dict(),
+        "agreed": dict(stage="agreed"),
+        "skipped": dict(stage="skipped"),
+        "paused": dict(stage="agreed", planned=True, paused=True),
+        "branch pending": dict(stage="agreed", branch_pending=True),
+    }
+
+    def states(self):
+        for name, kwargs in self.STATES.items():
+            yield name, g.SessionState(**kwargs)
+
+    def test_any_file_is_writable_in_every_stage(self):
+        for rel in ("analysis.md", "deep/nested/flows.mmd", "data.json", "diagram.html", "existing.md"):
+            path = self.project / ".collab" / rel
+            if rel == "existing.md":  # an existing file too, unlike a report outside .collab/
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("x", encoding="utf-8")
+            for name, state in self.states():
+                for tool in ("Write", "Edit"):
+                    with self.subTest(file=rel, stage=name, tool=tool):
+                        self.assertIsNone(self.pre(state, tool, file_path=str(path)))
+
+    def test_shell_output_into_the_folder_is_allowed_in_every_stage(self):
+        for command in ("pytest -q > .collab/tests.txt 2>&1", "git log --stat | tee .collab/log.txt",
+                        f"cat > {self.project}/.collab/notes.md <<'EOF'\nx\nEOF"):
+            for name, state in self.states():
+                with self.subTest(command=command, stage=name):
+                    event = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.project)}
+                    self.assertIsNone(g.decide_pre_tool_use(event, state, self.env))
+
+    def test_code_next_to_it_is_still_gated(self):
+        code = str(self.project / "src" / "app.py")
+        self.assertEqual(self.decision(self.pre(g.SessionState(), "Write", file_path=code)), "deny")
+        event = {"tool_name": "Bash", "tool_input": {"command": "echo x > .collab/a.txt && echo y > src/app.py"},
+                 "cwd": str(self.project)}
+        self.assertEqual(self.decision(g.decide_pre_tool_use(event, g.SessionState(stage="agreed"), self.env)), "deny")
+        for command in ("git log | tee src/app.py", "git log | tee .collab/a.txt src/app.py"):
+            with self.subTest(command=command):
+                self.assertEqual(self.decision(self.pre(g.SessionState(), "Bash", command=command)), "deny")
+        # a name that only starts like it
+        lookalike = str(self.project / ".collab-old" / "a.md")
+        self.assertEqual(self.decision(self.pre(g.SessionState(), "Write", file_path=lookalike)), "deny")
+
+    def test_reviewer_notes_stay_closed(self):
+        path = str(self.project / ".collab" / "reviewer-notes.md")
+        for name, state in self.states():
+            with self.subTest(stage=name):
+                self.assertEqual(self.decision(self.pre(state, "Write", file_path=path)), "deny")
+                self.assertEqual(self.decision(self.pre(state, "Bash", command="echo x >> .collab/reviewer-notes.md")), "deny")
+
+    def test_symlinks_do_not_open_the_code(self):
+        (self.project / "src").mkdir()
+        (self.project / ".collab").mkdir()
+        (self.project / ".collab" / "src").symlink_to(self.project / "src")
+        through_link = str(self.project / ".collab" / "src" / "app.py")
+        self.assertEqual(self.decision(self.pre(g.SessionState(), "Write", file_path=through_link)), "deny")
+        (self.project / ".collab").rename(self.project / "old-collab")
+        (self.project / ".collab").symlink_to(self.project / "src")  # the folder itself points at the code
+        self.assertEqual(self.decision(self.pre(g.SessionState(), "Write",
+                                                file_path=str(self.project / ".collab" / "app.py"))), "deny")
+
+    def test_writes_are_not_tracked_and_the_folder_leaves_git(self):
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        path = str(self.project / ".collab" / "report.md")
+        state = g.SessionState(stage="agreed")
+        out = g.decide_post_tool_use({"tool_name": "Write", "tool_input": {"file_path": path}}, state, self.env)
+        self.assertIsNone(out)  # no "explain this file"
+        self.assertEqual(state.changed_files, [])  # and the final review does not ask about it
+        for _ in range(2):
+            g.run("post-tool-use", {"session_id": "s", "tool_name": "Write", "tool_input": {"file_path": path}}, self.env)
+        exclude = (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+        self.assertEqual(exclude.splitlines().count("/.collab/"), 1)
 
 
 class ReviewerNotes(GateTestCase):
@@ -684,7 +763,7 @@ class ReviewerNotes(GateTestCase):
         self.assertIn(f": {self.RULE}\n", text)
         self.assertEqual(text.count("- 20"), 2)
         exclude = (self.project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-        self.assertEqual(exclude.splitlines().count("/.collab/reviewer-notes.md"), 1)
+        self.assertEqual(exclude.splitlines().count("/.collab/"), 1)
 
     def test_outside_git_the_developer_is_warned(self):
         out = self.note(self.RULE)

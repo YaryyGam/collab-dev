@@ -67,7 +67,7 @@ An empty list `[]` turns the reminder off (the rule in the output style remains)
 - `fetch_timeout_seconds`: after this the fetch is cut off and the check uses the last fetched state. The `UserPromptSubmit` hook timeout in `hooks/hooks.json` (30 s) must stay above it.
 - `max_listed`: how many incoming commits are listed for Claude.
 
-`documents` in `config/gate.json`: which new files count as reports and can be written without an agreement. `extensions` is the list of file types, `not_documents` the file names that never count (instruction and config files that happen to be `.md`/`.txt`); files under a dot-directory never count either. `"enabled": false` puts reports back behind `/collab:agree`.
+`documents` in `config/gate.json`: which new files count as reports and can be written without an agreement. `extensions` is the list of file types, `not_documents` the file names that never count (instruction and config files that happen to be `.md`/`.txt`); files under a dot-directory never count either. This list does not cover `.collab/`: that folder is writable in every stage regardless of file type or `enabled`. `"enabled": false` puts reports back behind `/collab:agree`.
 
 `task_tools` in `config/gate.json`: `"auto_enable": true` makes the `SessionStart` hook add `"env": {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"}` to the project's `.claude/settings.local.json` (kept out of git), because `/collab:plan` needs `TaskCreate`/`TaskUpdate` and newer models don't get them otherwise. Set it to `false` to manage the variable yourself; a value you already set, in the environment or in that file, is never changed.
 

@@ -34,7 +34,8 @@ GATE_MESSAGE = (
     "alternatives → joint choice. Writing opens once the developer runs "
     "/collab:agree <the approach in their own words>, /collab:plan <the same>, /collab:skip or /collab:off "
     "themselves. Do not try to get around the block some other way. (A report the developer asked for, such as "
-    "a review or test report in a new .md/.txt file, is not blocked: write it with Write.)"
+    "a review or test report in a new .md/.txt file, is not blocked: write it with Write. Nor is anything under "
+    ".collab/, the folder for analysis and documents: it is writable in every stage.)"
 )
 EDIT_ONLY_MESSAGE = (
     "collab: change the contents of project files only with Edit or Write, so the developer sees every "
@@ -176,7 +177,30 @@ def env_from_os(event: dict) -> Env:
     )
 
 
-NOTES_PATH = Path(".collab") / "reviewer-notes.md"  # relative to the project root
+# .collab/: Claude's own folder in the project for analysis and documents the developer reads (the project
+# map, reports, notes, diagrams). Not code: writable in every stage, never tracked, kept out of git.
+# The one exception is the reviewer notes below: only the developer writes those.
+COLLAB_DIR = Path(".collab")  # relative to the project root
+
+
+def collab_dir(env: Env) -> Path:
+    return env.project_dir / COLLAB_DIR
+
+
+def in_collab_dir(path: str, cwd: Path, env: Env) -> bool:
+    """Whether a file path (absolute, or a shell target relative to cwd) lies inside .collab/.
+    Symlinks are resolved, so .collab/x -> ../src does not open src/; a .collab that is itself a symlink
+    opens nothing. `$VAR/...` and quoted targets (`Q`) are unknown: no."""
+    if not path or path == "Q" or path.startswith(("$", "/dev/")):
+        return False
+    folder = collab_dir(env)
+    if folder.is_symlink():
+        return False
+    target = Path(_native_path(path)).expanduser()
+    return _is_inside(str(target if target.is_absolute() else cwd / target), folder)
+
+
+NOTES_PATH = COLLAB_DIR / "reviewer-notes.md"  # relative to the project root
 NOTES_HEADER = (
     "# Reviewer notes\n\n"
     "Rules from the developer for /collab:review: the reviewer reads this file before every review and does not\n"
@@ -190,7 +214,7 @@ def notes_file(env: Env) -> Path:
 
 
 # /collab:map: Claude's analysis of the whole project, read by later sessions instead of re-exploring
-MAP_PATH = Path(".collab") / "project-map.md"
+MAP_PATH = COLLAB_DIR / "project-map.md"
 
 
 def map_file(env: Env) -> Path:
@@ -217,11 +241,12 @@ def write_reviewer_note(env: Env, text: str) -> bool:
         if f.tell() == 0:
             f.write(NOTES_HEADER)
         f.write(f"- {time.strftime('%Y-%m-%d')}: {text}\n")
-    return exclude_from_git(env, NOTES_PATH)
+    return exclude_from_git(env, COLLAB_DIR, directory=True)
 
 
-def exclude_from_git(env: Env, rel_path: Path) -> bool:
-    """Add /<rel_path> to .git/info/exclude (local, nothing to commit). False when not a git repository."""
+def exclude_from_git(env: Env, rel_path: Path, directory: bool = False) -> bool:
+    """Add /<rel_path> (/<rel_path>/ for a directory) to .git/info/exclude (local, nothing to commit).
+    False when not a git repository."""
     try:  # --git-path also finds info/exclude in a worktree, where .git is a file
         out = subprocess.run(["git", "-C", str(env.project_dir), "rev-parse", "--git-path", "info/exclude"],
                              capture_output=True, text=True, timeout=5)
@@ -231,7 +256,7 @@ def exclude_from_git(env: Env, rel_path: Path) -> bool:
         return False
     exclude = Path(out.stdout.strip())
     exclude = exclude if exclude.is_absolute() else env.project_dir / exclude
-    entry = "/" + rel_path.as_posix()
+    entry = "/" + rel_path.as_posix() + ("/" if directory else "")
     existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     if entry not in existing.splitlines():
         exclude.parent.mkdir(parents=True, exist_ok=True)
@@ -432,6 +457,10 @@ def bash_write_reason(command: str, config: dict, skip_git: bool = False, safe_t
         words = _command_words(segment, cfg["wrappers"])
         if skip_git and words and _program_name(words[0]) == "git":
             continue
+        if safe_target and words and _program_name(words[0]) == "tee":  # `… | tee .collab/log.txt`, like `>`
+            files = [w for w in words[1:] if not w.startswith("-")]
+            if files and all(safe_target(f) for f in files):
+                continue
         reason = _segment_write_reason(words, command, cfg)
         if reason:
             return reason
@@ -580,8 +609,9 @@ def _git_denied(tool: str, command: str, state: SessionState, env: Env) -> str |
 
 
 def _inside_project(target: str, cwd: Path, env: Env) -> bool:
-    """Whether a shell write target is a project file. `$VAR/...` and quoted targets (`Q`) are unknown: no."""
-    if not target or target == "Q" or target.startswith(("$", "/dev/")):
+    """Whether a shell write target is a project file under the edit-only rule: not .collab/, which is
+    Claude's own folder. `$VAR/...` and quoted targets (`Q`) are unknown: no."""
+    if not target or target == "Q" or target.startswith(("$", "/dev/")) or in_collab_dir(target, cwd, env):
         return False
     path = Path(_native_path(target)).expanduser()
     return _is_inside(str(path if path.is_absolute() else cwd / path), env.project_dir)
@@ -1056,13 +1086,15 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     command = tool_input.get("command") or ""
     if tool in SHELL_TOOLS and NOTES_PATH.name in command and shell_write_reason(tool, command, env.config):
         return _deny(NOTES_PROTECT_MESSAGE)
-    # the project map is documentation, not code under discussion: writable in every stage
-    if tool in write_tools and _is_inside(_tool_path(tool_input), map_file(env)):
+    cwd = Path(event.get("cwd") or env.project_dir)
+    # .collab/ (the project map, analysis, reports) is Claude's folder, not code: writable in every stage,
+    # also on a plan pause and while the branch question is open
+    if tool in write_tools and in_collab_dir(_tool_path(tool_input), cwd, env):
         return None
     # so is a report Claude was asked for: a new document in the discussion stage, and afterwards the same file
-    cwd = Path(event.get("cwd") or env.project_dir)
     if tool in write_tools and is_report(_tool_path(tool_input), cwd, state, env, register=state.stage == "discussing"):
         return None
+    collab_target = lambda target: in_collab_dir(target, cwd, env)  # noqa: E731 — `cmd > .collab/x.txt` is fine
 
     if state.stage != "off" and tool in SHELL_TOOLS:
         denied = _git_denied(tool, tool_input.get("command") or "", state, env)
@@ -1078,13 +1110,12 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
         if tool in write_tools and _is_inside(_tool_path(tool_input), env.project_dir):
             return _deny(PAUSED_MESSAGE, PAUSED_HINT)
         if tool in SHELL_TOOLS:
-            reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git)
+            reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git, collab_target)
             return _deny(f"{PAUSED_MESSAGE} (detected: {reason})", PAUSED_HINT) if reason else None
         if tool == "TaskUpdate" and tool_input.get("status") in ("in_progress", "completed"):
             return _deny(PAUSED_MESSAGE, PAUSED_HINT)
         return None
     if state.stage in OPEN_STAGES and tool in SHELL_TOOLS:
-        cwd = Path(event.get("cwd") or env.project_dir)
         reason = shell_content_write_reason(tool, tool_input.get("command") or "", cwd, env)
         return _deny(f"{EDIT_ONLY_MESSAGE} (detected: {reason})") if reason else None
     if state.stage != "discussing":
@@ -1097,7 +1128,7 @@ def decide_pre_tool_use(event: dict, state: SessionState, env: Env) -> dict | No
     if tool in SHELL_TOOLS:
         # `pytest > test-report.txt`: output saved into a new report file is not a change to the code
         reason = shell_write_reason(tool, tool_input.get("command") or "", env.config, skip_git,
-                                    lambda target: is_report(target, cwd, state, env, register=True))
+                                    lambda target: collab_target(target) or is_report(target, cwd, state, env, register=True))
         if reason:
             return _deny(f"{GATE_MESSAGE} (detected: {reason})", _gate_hint(state))
     return None
@@ -1183,9 +1214,9 @@ def decide_post_tool_use(event: dict, state: SessionState, env: Env) -> dict | N
         state.paused = True
         return {"decision": "block", "reason": _stage_done_message(state, env)}
     if tool in env.config["write_tools"]:
-        path = _tool_path(tool_input)
-        if path and (_is_inside(path, map_file(env)) or is_report(path, Path(event.get("cwd") or env.project_dir), state, env)):
-            return None  # the project map and reports are not code changes: no tracking, no explanation needed
+        path, cwd = _tool_path(tool_input), Path(event.get("cwd") or env.project_dir)
+        if path and (in_collab_dir(path, cwd, env) or is_report(path, cwd, state, env)):
+            return None  # .collab/ and reports are not code changes: no tracking, no explanation needed
         if path and _is_inside(path, env.project_dir) and path not in state.stage_anchors:
             state.stage_anchors[path] = event.get("tool_use_id") or ""
         if path and _is_inside(path, env.project_dir) and path not in state.changed_files:
@@ -1392,7 +1423,7 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
                 out["hookSpecificOutput"]["additionalContext"] += (
                     "\nThe project is not a git repository, so the notes file could not be excluded from git: "
                     "tell the developer.")
-            if kind == "map" and not exclude_from_git(env, MAP_PATH):
+            if kind == "map" and not exclude_from_git(env, COLLAB_DIR, directory=True):
                 out["hookSpecificOutput"]["additionalContext"] += (
                     "\nThe project is not a git repository, so the map could not be excluded from git: "
                     "tell the developer.")
@@ -1404,6 +1435,11 @@ def run(event_name: str, event: dict, env: Env) -> dict | None:
         return out
     elif event_name == "post-tool-use":
         out = decide_post_tool_use(event, state, env)
+        # whatever Claude puts in .collab/ stays local: keep the folder out of git (once; a no-op afterwards)
+        path = _tool_path(event.get("tool_input") or {})
+        if (event.get("tool_name") in env.config["write_tools"]
+                and in_collab_dir(path, Path(event.get("cwd") or env.project_dir), env)):
+            exclude_from_git(env, COLLAB_DIR, directory=True)
     elif event_name == "stop":
         out = decide_stop(event, state, env)
     else:
